@@ -20,6 +20,7 @@ from mtzcode.client import ChatClient, ChatClientError
 from mtzcode.commands import SlashCommand, commands_dir, load_commands, parse_slash
 from mtzcode.config import Config
 from mtzcode.profiles import PROFILES, Profile, get_profile, list_profiles
+from mtzcode.skills import Skill, load_skills, skills_dirs
 from mtzcode.tools import default_registry
 
 _PLAN_MODE_PROMPT_PATH = Path(__file__).parent / "prompts" / "plan_mode.md"
@@ -71,6 +72,8 @@ class SessionState:
         self.always_allow: set[str] = set()
         # Plan mode: se True, bloqueia tools destrutivas independente do always_allow
         self.plan_mode: bool = False
+        # Skill ativa: se set, o system prompt atual vem dela
+        self.active_skill: Skill | None = None
 
     def should_confirm(self, tool_name: str) -> bool:
         if self.plan_mode:
@@ -298,6 +301,13 @@ def _repl(cfg: Config) -> None:
             f"{', '.join('/' + n for n in custom_commands)}[/]"
         )
 
+    # Carrega skills (oficiais + pessoais)
+    skills = load_skills()
+    if skills:
+        console.print(
+            f"[dim]{len(skills)} skills disponíveis — /skill pra listar[/]"
+        )
+
     try:
         while True:
             try:
@@ -375,6 +385,34 @@ def _repl(cfg: Config) -> None:
                 except Exception as exc:  # noqa: BLE001
                     console.print(f"[red]erro indexando:[/] {exc}")
                 continue
+            if user_input.startswith("/skill"):
+                parts = user_input.split(None, 1)
+                arg = parts[1].strip() if len(parts) > 1 else ""
+                if not arg:
+                    _print_skills(skills, state.active_skill)
+                    continue
+                if arg == "off":
+                    if state.active_skill is None:
+                        console.print("[dim]nenhuma skill ativa.[/]")
+                        continue
+                    agent.set_system_prompt(default_prompt)
+                    state.active_skill = None
+                    console.print("[green]✓[/] skill desativada")
+                    continue
+                skill = skills.get(arg)
+                if skill is None:
+                    console.print(
+                        f"[red]skill desconhecida:[/] {arg}. "
+                        "Digite [cyan]/skill[/] pra listar."
+                    )
+                    continue
+                agent.set_system_prompt(skill.prompt)
+                state.active_skill = skill
+                console.print(
+                    f"[green]✓[/] skill ativada: [bold]{skill.name}[/] "
+                    f"[dim]({skill.source})[/]"
+                )
+                continue
 
             # --- slash commands customizados ---
             parsed = parse_slash(user_input)
@@ -439,6 +477,28 @@ def _index_cwd() -> None:
     )
 
 
+def _print_skills(skills: dict[str, Skill], active: Skill | None) -> None:
+    if not skills:
+        official, personal = skills_dirs()
+        console.print(
+            "[dim]nenhuma skill encontrada. Coloque skills em:\n"
+            f"  oficial: {official}\n"
+            f"  pessoal: {personal}[/]"
+        )
+        return
+    console.print("[bold]Skills disponíveis:[/]")
+    for name, s in skills.items():
+        marker = "[green]●[/]" if active and active.name == name else " "
+        badge = "[dim](oficial)[/]" if s.source == "official" else "[cyan](pessoal)[/]"
+        console.print(f"  {marker} [bold cyan]{name}[/] {badge}")
+        if s.description:
+            console.print(f"      [dim]{s.description}[/]")
+    console.print(
+        "\n[dim]Uso: [cyan]/skill <nome>[/] · "
+        "desativar: [cyan]/skill off[/][/]"
+    )
+
+
 def _print_help(registry, custom_commands: dict[str, SlashCommand] | None = None) -> None:
     console.print(
         "[bold]Comandos do REPL:[/]\n"
@@ -448,6 +508,7 @@ def _print_help(registry, custom_commands: dict[str, SlashCommand] | None = None
         "  [cyan]/plano[/]      ativa modo de planejamento (sem tools destrutivas)\n"
         "  [cyan]/executar[/]   sai do modo plano\n"
         "  [cyan]/indexar[/]    gera embeddings do projeto pra search_code\n"
+        "  [cyan]/skill[/]      lista ou ativa skills (ex: /skill python-expert)\n"
         "  [cyan]/ajuda[/]      mostra esta mensagem\n"
     )
     if custom_commands:
