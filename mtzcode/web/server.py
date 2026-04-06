@@ -129,10 +129,27 @@ class Session:
 
         # Monkey-patch: substitui registry.schemas() por uma closure que
         # filtra tools desabilitadas. Mantém método original como fallback.
-        # Isso evita ter que mexer no Agent — ele continua chamando
-        # `self.registry.schemas()` normalmente.
+        # Com SkillRegistry o schema agora é só 2 meta-tools, mas mantemos
+        # o filter por compat (disable das meta-tools desativa o agent).
         self._original_schemas = self.registry.schemas
         self.registry.schemas = self._filtered_schemas  # type: ignore[method-assign]
+
+        # Quando estamos usando SkillRegistry, também precisamos filtrar
+        # no dispatch interno: se a habilidade está desabilitada,
+        # `usar_habilidade` deve recusar ao despachar.
+        inner = getattr(self.registry, "inner", None)
+        if inner is not None and hasattr(inner, "get"):
+            self._original_inner_get = inner.get
+
+            def _filtered_get(name: str):
+                if name in self.disabled_tools:
+                    from mtzcode.tools.base import ToolError as _TE
+                    raise _TE(
+                        f"habilidade `{name}` está desabilitada nesta sessão."
+                    )
+                return self._original_inner_get(name)
+
+            inner.get = _filtered_get  # type: ignore[method-assign]
 
         # Inicia logger de sessão (silenciosamente — falha não quebra o web).
         if _SESSION_LOG_AVAILABLE and SessionLogger is not None:
@@ -182,9 +199,14 @@ class Session:
         """Liga/desliga o auto mode instalando o ``auto_confirm_factory``."""
         self.auto_mode = bool(enabled)
         if self.auto_mode and _AUTO_AVAILABLE and auto_confirm_factory is not None:
-            self.agent.confirm_cb = auto_confirm_factory()
+            cb = auto_confirm_factory()
         else:
-            self.agent.confirm_cb = None
+            cb = None
+        self.agent.confirm_cb = cb
+        # Propaga pro SkillRegistry (se for o caso) — assim habilidades
+        # destrutivas chamadas via `usar_habilidade` respeitam o auto mode.
+        if hasattr(self.registry, "set_confirm_cb"):
+            self.registry.set_confirm_cb(cb)
 
     # ----- session logger --------------------------------------------------
     def rotate_session_logger(self) -> None:

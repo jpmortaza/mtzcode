@@ -87,13 +87,13 @@ def _resolve_groups(groups: list[str] | None) -> list[str]:
     return ["core"]
 
 
-def default_registry(groups: list[str] | None = None) -> ToolRegistry:
-    """Cria o registry de tools.
+def _build_inner_registry(groups: list[str] | None = None) -> ToolRegistry:
+    """Constrói um ToolRegistry "cru" com as tools dos grupos pedidos.
 
-    Por padrão carrega apenas o grupo `core` (10 tools, ~2-3k tokens de schemas).
-    Use `groups=["core","macos"]` ou env `MTZCODE_TOOL_GROUPS=all` pra mais.
-
-    Grupos disponíveis: core, web, macos, documents, all.
+    Por padrão (sem args/env) retorna TODAS as habilidades — o overhead
+    de schema agora é absorvido pela `SkillRegistry`, que expõe só 2
+    meta-tools ao modelo. Os grupos só servem pra desativar categorias
+    inteiras quando o usuário quiser.
     """
     requested = _resolve_groups(groups)
     if "all" in requested:
@@ -109,8 +109,31 @@ def default_registry(groups: list[str] | None = None) -> ToolRegistry:
                 continue
             seen.add(cls)
             tools.append(cls())
-
     return ToolRegistry(tools)
+
+
+def default_registry(groups: list[str] | None = None):
+    """Registry padrão do mtzcode — usa o sistema de habilidades sob demanda.
+
+    Retorna uma `SkillRegistry` que expõe ao modelo apenas 2 meta-tools
+    (`listar_habilidades` e `usar_habilidade`), mas mantém TODAS as
+    habilidades acessíveis via dispatch interno. Isso reduz o contexto
+    base de ~6-8k tokens (24 schemas) pra ~500 tokens (2 schemas),
+    deixando modelos locais 10x mais responsivos.
+
+    Pra obter o registry "cru" antigo (todas as tools no schema), use
+    `_build_inner_registry()` diretamente.
+    """
+    # Por padrão habilita TUDO (env var MTZCODE_TOOL_GROUPS pode restringir)
+    if groups is None and not os.environ.get("MTZCODE_TOOL_GROUPS"):
+        groups = ["all"]
+
+    inner = _build_inner_registry(groups)
+
+    # Import lazy pra evitar ciclo (habilidades.py importa de tools.base)
+    from mtzcode.habilidades import SkillRegistry
+
+    return SkillRegistry(inner)
 
 
 __all__ = [
