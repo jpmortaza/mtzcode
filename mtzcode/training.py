@@ -185,33 +185,79 @@ def format_datasets(val_ratio: float = 0.05, seed: int = 42) -> dict[str, Any]:
     import random as _random
     from mtzcode.finetune import format_data as _fd
 
-    raw_files = sorted(RAW_DIR.glob("*.jsonl"))
+    raw_files = sorted(
+        p for p in RAW_DIR.iterdir()
+        if p.is_file()
+        and not p.name.startswith(".")
+        and p.suffix.lower() in {".jsonl", ".json", ".txt", ".md"}
+    )
     if not raw_files:
         raise RuntimeError(
-            "nenhum .jsonl em raw/. Suba um arquivo em Datasets primeiro "
-            "(formato ShareGPT, QA com question/answer, ou texto puro com "
-            "campo 'text')."
+            "nenhum arquivo em raw/. Suba algo em Datasets primeiro: "
+            ".jsonl (ShareGPT/QA), .txt ou .md (texto puro — gera "
+            "perguntas sintéticas automaticamente)."
         )
 
     rng = _random.Random(seed)
     examples: list[dict[str, Any]] = []
     per_file: dict[str, int] = {}
+
+    def _chunks_from_text(content: str, chunk_size: int = 1500) -> list[tuple[str, str]]:
+        """Quebra texto em pedaços. Tenta usar parágrafos; se muito grandes, fatia."""
+        out: list[tuple[str, str]] = []
+        # Tenta separar por linhas em branco (parágrafos)
+        paragraphs = [p.strip() for p in content.split("\n\n") if p.strip()]
+        buf = ""
+        for p in paragraphs:
+            if len(buf) + len(p) + 2 <= chunk_size:
+                buf = (buf + "\n\n" + p).strip()
+            else:
+                if buf:
+                    out.append(("", buf))
+                if len(p) <= chunk_size:
+                    buf = p
+                else:
+                    # parágrafo gigante — fatia em janelas
+                    for i in range(0, len(p), chunk_size):
+                        out.append(("", p[i:i + chunk_size]))
+                    buf = ""
+        if buf:
+            out.append(("", buf))
+        return out
+
     for raw_file in raw_files:
         count = 0
-        for row in _fd._iter_raw_file(raw_file):
-            ex: dict[str, Any] | None
-            if "conversations" in row:
-                # já está em ShareGPT — passa direto
-                ex = row
-            elif "question" in row and "answer" in row:
-                ex = _fd._format_qa(row)
-            elif "text" in row:
+        ext = raw_file.suffix.lower()
+        if ext in (".jsonl", ".json"):
+            for row in _fd._iter_raw_file(raw_file):
+                ex: dict[str, Any] | None
+                if "conversations" in row:
+                    ex = row
+                elif "question" in row and "answer" in row:
+                    ex = _fd._format_qa(row)
+                elif "text" in row:
+                    ex = _fd._format_text(row, rng)
+                else:
+                    ex = None
+                if ex is not None:
+                    examples.append(ex)
+                    count += 1
+        else:
+            # .txt / .md — vira texto puro com sintético
+            try:
+                content = raw_file.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                content = ""
+            # Usa o nome do arquivo como "título" pra prompts melhores
+            title = raw_file.stem.replace("-", " ").replace("_", " ").strip()
+            for _, chunk in _chunks_from_text(content):
+                if len(chunk) < 80:
+                    continue
+                row = {"text": chunk, "title": title}
                 ex = _fd._format_text(row, rng)
-            else:
-                ex = None
-            if ex is not None:
-                examples.append(ex)
-                count += 1
+                if ex is not None:
+                    examples.append(ex)
+                    count += 1
         per_file[raw_file.name] = count
 
     if not examples:
