@@ -468,6 +468,40 @@
   .btn.primary:hover { background: #e5876a; }
   .btn.danger { color: var(--red); }
   .btn.danger:hover { background: var(--red); color: white; border-color: var(--red); }
+  #mic-btn { font-size: 16px; padding: 8px 12px; }
+  #mic-btn.recording {
+    background: var(--red);
+    border-color: var(--red);
+    color: white;
+    animation: pulse 1.2s infinite;
+  }
+  .help-section {
+    margin-bottom: 18px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .help-section:last-child { border-bottom: none; }
+  .help-section h3 {
+    color: var(--accent);
+    font-size: 14px;
+    margin-bottom: 8px;
+  }
+  .help-section .body {
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-dim);
+  }
+  .help-section .body p { margin: 6px 0; }
+  .help-section .body code {
+    background: var(--bg-elev-2);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--cyan);
+  }
+  .help-section .body strong { color: var(--text); }
+  .help-section .body ul, .help-section .body ol { margin: 6px 0 6px 20px; }
   .btn.small { padding: 4px 10px; font-size: 11.5px; }
   .input-row .hint {
     font-size: 11px;
@@ -890,6 +924,8 @@
       <span id="auto-badge" class="badge auto" style="display:none;">AUTO</span>
       <div class="spacer"></div>
       <button class="icon-btn" id="auto-toggle" title="Modo autônomo">⚡ auto</button>
+      <button class="icon-btn" id="settings-btn" title="Configurações (API keys, modelo, contexto)">⚙ config</button>
+      <button class="icon-btn" id="help-btn" title="Ajuda">? ajuda</button>
       <button class="icon-btn" id="export-btn" title="Exportar conversa">↓ export</button>
       <button class="icon-btn" id="reset-btn" title="Limpar histórico">⌫ limpar</button>
       <button class="toggle-btn" id="toggle-right" title="Colapsar painel">⊞</button>
@@ -928,6 +964,7 @@
     <footer>
       <div class="input-row">
         <textarea id="input" rows="2" placeholder="Pergunte ou peça algo para o mtzcode..."></textarea>
+        <button class="btn" id="mic-btn" title="Ditar por voz (clique e fale)">🎤</button>
         <button class="btn primary" id="send-btn">Enviar ↵</button>
       </div>
       <div class="footer-hint">
@@ -1773,6 +1810,184 @@
   }
 
   // ============================================================
+  // Settings modal
+  // ============================================================
+  async function openSettingsModal() {
+    let settings;
+    try {
+      settings = await api('/api/settings');
+    } catch (e) {
+      toast('falha carregando settings: ' + e.message, 'error');
+      return;
+    }
+    const ak = settings.api_keys || {};
+    const mo = settings.model_options || {};
+    const m = openModal(`
+      <h2>⚙ Configurações <button class="close">×</button></h2>
+
+      <div style="font-size:11px;color:var(--text-mute);margin-bottom:12px;">
+        Salvo em <code>~/.mtzcode/settings.json</code>. As mudanças entram em vigor na próxima mensagem.
+      </div>
+
+      <label>Pasta de dados</label>
+      <input id="st-data" type="text" value="${escapeHtml(settings.data_folder || '')}" />
+
+      <label style="margin-top:18px;">🔑 API Keys (perfis cloud)</label>
+      <div style="font-size:11px;color:var(--text-mute);margin-bottom:6px;">
+        Cole a chave — fica salva localmente e vira variável de ambiente.
+      </div>
+      <label style="text-transform:none;font-size:12px;margin-top:8px;">GROQ_API_KEY</label>
+      <input id="st-groq" type="password" placeholder="${ak.GROQ_API_KEY === '***' ? '(definida)' : 'gsk_...'}" value="${ak.GROQ_API_KEY === '***' ? '***' : ''}" />
+      <label style="text-transform:none;font-size:12px;margin-top:8px;">MARITACA_API_KEY</label>
+      <input id="st-maritaca" type="password" placeholder="${ak.MARITACA_API_KEY === '***' ? '(definida)' : '...'}" value="${ak.MARITACA_API_KEY === '***' ? '***' : ''}" />
+
+      <label style="margin-top:18px;">⚙ Opções do modelo (Ollama)</label>
+      <div class="row">
+        <div>
+          <label style="text-transform:none;font-size:12px;">Temperatura</label>
+          <input id="st-temp" type="number" step="0.1" min="0" max="2" value="${mo.temperature ?? 0.3}" />
+        </div>
+        <div>
+          <label style="text-transform:none;font-size:12px;">top_p</label>
+          <input id="st-topp" type="number" step="0.05" min="0" max="1" value="${mo.top_p ?? 0.9}" />
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label style="text-transform:none;font-size:12px;">num_ctx (janela)</label>
+          <input id="st-ctx" type="number" step="1024" min="1024" value="${mo.num_ctx ?? 16384}" />
+        </div>
+        <div>
+          <label style="text-transform:none;font-size:12px;">num_predict (max tokens)</label>
+          <input id="st-pred" type="number" step="256" min="128" value="${mo.num_predict ?? 2048}" />
+        </div>
+      </div>
+      <label style="text-transform:none;font-size:12px;">keep_alive (ex: 30m, 1h)</label>
+      <input id="st-keep" type="text" value="${escapeHtml(mo.keep_alive ?? '30m')}" />
+
+      <label style="margin-top:18px;">📝 Contexto pessoal</label>
+      <div style="font-size:11px;color:var(--text-mute);margin-bottom:6px;">
+        Texto livre concatenado ao system prompt — quem você é, sua empresa, preferências de estilo, convenções do projeto.
+      </div>
+      <textarea id="st-ctxpersonal" rows="6" placeholder="Ex: Sou Jean Mortaza, dev fullstack. Use Python 3.11+, type hints sempre. Prefiro código direto sem comentários óbvios. Em PT-BR.">${escapeHtml(settings.personal_context || '')}</textarea>
+
+      <div class="actions">
+        <button class="btn" id="st-cancel">Cancelar</button>
+        <button class="btn primary" id="st-save">Salvar</button>
+      </div>
+    `);
+    m.querySelector('#st-cancel').addEventListener('click', closeModal);
+    m.querySelector('#st-save').addEventListener('click', async () => {
+      const payload = {
+        data_folder: m.querySelector('#st-data').value.trim(),
+        api_keys: {
+          GROQ_API_KEY: m.querySelector('#st-groq').value,
+          MARITACA_API_KEY: m.querySelector('#st-maritaca').value,
+        },
+        model_options: {
+          temperature: parseFloat(m.querySelector('#st-temp').value) || 0.3,
+          top_p: parseFloat(m.querySelector('#st-topp').value) || 0.9,
+          num_ctx: parseInt(m.querySelector('#st-ctx').value) || 16384,
+          num_predict: parseInt(m.querySelector('#st-pred').value) || 2048,
+          keep_alive: m.querySelector('#st-keep').value.trim() || '30m',
+        },
+        personal_context: m.querySelector('#st-ctxpersonal').value,
+      };
+      try {
+        await api('/api/settings', { method: 'POST', body: JSON.stringify(payload) });
+        toast('configurações salvas', 'success');
+        closeModal();
+      } catch (e) {
+        toast('falha salvando: ' + e.message, 'error');
+      }
+    });
+  }
+
+  // ============================================================
+  // Help modal
+  // ============================================================
+  async function openHelpModal() {
+    let data;
+    try {
+      data = await api('/api/help');
+    } catch (e) {
+      toast('falha carregando ajuda: ' + e.message, 'error');
+      return;
+    }
+    const sections = (data.sections || []).map(s => `
+      <div class="help-section">
+        <h3>${escapeHtml(s.title)}</h3>
+        <div class="body">${marked.parse(s.body || '')}</div>
+      </div>
+    `).join('');
+    openModal(`
+      <h2>? Ajuda — mtzCode <button class="close">×</button></h2>
+      ${sections}
+    `);
+  }
+
+  // ============================================================
+  // Voz → Texto (Web Speech API)
+  // ============================================================
+  let recognition = null;
+  let recognizing = false;
+  function setupVoice() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      $('mic-btn').style.opacity = '0.4';
+      $('mic-btn').title = 'Ditado por voz não suportado neste navegador (use Chrome/Safari)';
+      return;
+    }
+    recognition = new SR();
+    recognition.lang = 'pt-BR';
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    let baseText = '';
+    recognition.onstart = () => {
+      recognizing = true;
+      $('mic-btn').classList.add('recording');
+      $('mic-btn').textContent = '⏺';
+      baseText = $('input').value;
+      if (baseText && !baseText.endsWith(' ')) baseText += ' ';
+      setStatus('ouvindo... fale agora');
+    };
+    recognition.onresult = (ev) => {
+      let interim = '';
+      let final = '';
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const r = ev.results[i];
+        if (r.isFinal) final += r[0].transcript;
+        else interim += r[0].transcript;
+      }
+      if (final) {
+        baseText += final + ' ';
+        $('input').value = baseText;
+      } else {
+        $('input').value = baseText + interim;
+      }
+    };
+    recognition.onerror = (ev) => {
+      toast('erro de microfone: ' + ev.error, 'error');
+      stopVoice();
+    };
+    recognition.onend = () => {
+      recognizing = false;
+      $('mic-btn').classList.remove('recording');
+      $('mic-btn').textContent = '🎤';
+      setStatus('pronto');
+    };
+  }
+  function toggleVoice() {
+    if (!recognition) { setupVoice(); }
+    if (!recognition) return;
+    if (recognizing) stopVoice();
+    else { try { recognition.start(); } catch (e) {} }
+  }
+  function stopVoice() {
+    try { recognition && recognition.stop(); } catch (e) {}
+  }
+
+  // ============================================================
   // Chat: render
   // ============================================================
   function setStatus(text, isError=false) {
@@ -2027,8 +2242,11 @@
     $('profile-chip').addEventListener('click', openProfileModal);
     $('cwd-chip').addEventListener('click', openCwdModal);
     $('auto-toggle').addEventListener('click', toggleAuto);
+    $('settings-btn').addEventListener('click', openSettingsModal);
+    $('help-btn').addEventListener('click', openHelpModal);
     $('export-btn').addEventListener('click', exportChat);
     $('reset-btn').addEventListener('click', resetChat);
+    $('mic-btn').addEventListener('click', toggleVoice);
 
     // hint cards
     $$('.hint-card').forEach(card => {

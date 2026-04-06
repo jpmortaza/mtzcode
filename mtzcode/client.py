@@ -137,28 +137,39 @@ class ChatClient:
         CRÍTICO pro Ollama: sem `num_ctx` explícito, ele usa 2048 tokens
         e trunca o prompt (system + tools + histórico facilmente passa
         de 4-5k), o que **destrói o KV cache** entre turnos e força o
-        modelo a reprocessar TUDO a cada mensagem — principal causa de
-        lentidão percebida pelo usuário.
+        modelo a reprocessar TUDO a cada mensagem.
 
-        `keep_alive` mantém o modelo carregado em VRAM por 30 minutos,
-        evitando cold start de ~30s a cada nova conversa.
+        Lê de ``Settings`` (editável pelo web UI). Env vars MTZCODE_*
+        têm precedência pra debug/scripting.
 
-        Esses campos vão pro corpo OpenAI-compatible — Ollama lê,
-        backends cloud (Groq/Maritaca) ignoram silenciosamente.
+        Cloud (Groq/Maritaca) ignora esses campos silenciosamente.
         """
         if not self.profile.is_local or self.profile.backend != "ollama":
             return
-        # Lê env vars pra permitir tuning sem mexer em código
-        num_ctx = int(os.environ.get("MTZCODE_NUM_CTX", "16384"))
-        num_predict = int(os.environ.get("MTZCODE_NUM_PREDICT", "2048"))
-        keep_alive = os.environ.get("MTZCODE_KEEP_ALIVE", "30m")
+        # Carrega settings persistentes
+        try:
+            from mtzcode.settings import get_settings
+            opts = get_settings().model_options
+            num_ctx = int(os.environ.get("MTZCODE_NUM_CTX", opts.num_ctx))
+            num_predict = int(
+                os.environ.get("MTZCODE_NUM_PREDICT", opts.num_predict)
+            )
+            keep_alive = os.environ.get("MTZCODE_KEEP_ALIVE", opts.keep_alive)
+            temperature = opts.temperature
+            top_p = opts.top_p
+        except Exception:
+            num_ctx = int(os.environ.get("MTZCODE_NUM_CTX", "16384"))
+            num_predict = int(os.environ.get("MTZCODE_NUM_PREDICT", "2048"))
+            keep_alive = os.environ.get("MTZCODE_KEEP_ALIVE", "30m")
+            temperature = 0.3
+            top_p = 0.9
         payload.setdefault(
             "options",
             {
                 "num_ctx": num_ctx,
                 "num_predict": num_predict,
-                "temperature": 0.3,
-                "top_p": 0.9,
+                "temperature": temperature,
+                "top_p": top_p,
             },
         )
         payload.setdefault("keep_alive", keep_alive)

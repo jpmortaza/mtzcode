@@ -29,5 +29,22 @@ class Config:
 
     def system_prompt(self) -> str:
         if self.system_prompt_path.exists():
-            return self.system_prompt_path.read_text(encoding="utf-8")
-        return "Você é o mtzcode, um assistente de código útil. Responda em português."
+            base = self.system_prompt_path.read_text(encoding="utf-8")
+        else:
+            base = (
+                "Você é o mtzcode, um assistente de código útil. "
+                "Responda em português."
+            )
+        # Concatena instruções pessoais/empresariais do usuário (vindas do
+        # painel de Configurações na web UI). Vai como bloco extra no fim
+        # do system prompt pra não conflitar com regras de tool calling.
+        try:
+            from mtzcode.settings import get_settings
+            extra = (get_settings().personal_context or "").strip()
+            if extra:
+                base = (
+                    f"{base}\n\n# Contexto pessoal do usuário\n{extra}\n"
+                )
+        except Exception:
+            pass
+        return base

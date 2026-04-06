@@ -349,6 +349,124 @@ def create_app() -> FastAPI:
         session.reset()
         return {"ok": True}
 
+    @app.get("/api/settings")
+    def settings_get() -> dict[str, Any]:
+        from mtzcode.settings import get_settings
+        return get_settings().to_dict()
+
+    @app.post("/api/settings")
+    def settings_set(req: dict[str, Any]) -> dict[str, Any]:
+        """Atualiza settings persistentes e aplica em tempo real."""
+        from mtzcode.settings import get_settings, reload_settings
+        s = get_settings()
+        s.update_from_dict(req or {})
+        s.save()
+        reload_settings()
+        # Reset do client é necessário se a key/perfil mudar — mas
+        # opções de modelo (num_ctx etc) são lidas no próximo /chat,
+        # então não precisa nada além de save+reload.
+        return {"ok": True, "settings": get_settings().to_dict()}
+
+    @app.get("/api/help")
+    def help_endpoint() -> dict[str, Any]:
+        """Conteúdo da seção de Ajuda — texto markdown estático."""
+        return {
+            "sections": [
+                {
+                    "title": "Como funciona",
+                    "body": (
+                        "O mtzcode é um assistente de código que roda 100% local "
+                        "no seu Mac via Ollama. Tudo o que você digitar fica na "
+                        "sua máquina — não vai pra cloud (a menos que você "
+                        "selecione um perfil cloud como Groq).\n\n"
+                        "Ele usa **tool calling**: quando você pede pra criar/ler/"
+                        "editar arquivos, ele invoca habilidades reais (read, "
+                        "write, edit, bash, find_files, etc) em vez de só gerar "
+                        "texto."
+                    ),
+                },
+                {
+                    "title": "Configurações",
+                    "body": (
+                        "Acesse pelo botão ⚙️ no topo direito.\n\n"
+                        "- **API Keys**: pra usar perfis cloud (Groq, Maritaca) "
+                        "cole a key aqui — fica salva em "
+                        "`~/.mtzcode/settings.json` e vira env var no startup.\n"
+                        "- **Temperatura**: 0.0–1.0. Mais baixo = mais "
+                        "determinístico (bom pra código). Default 0.3.\n"
+                        "- **num_ctx**: tamanho da janela de contexto do Ollama. "
+                        "Aumente se você tem muito histórico (default 16384).\n"
+                        "- **keep_alive**: por quanto tempo o modelo fica "
+                        "carregado em VRAM (default 30m). Aumente pra evitar "
+                        "cold start.\n"
+                        "- **Pasta de dados**: onde ficam knowledge base, "
+                        "datasets de fine-tune e conversas salvas.\n"
+                        "- **Contexto pessoal**: texto livre que vai como bloco "
+                        "extra no system prompt. Use pra dar contexto sobre "
+                        "você (nome, empresa, preferências de estilo, "
+                        "convenções do projeto)."
+                    ),
+                },
+                {
+                    "title": "Como treinar em português (fine-tuning)",
+                    "body": (
+                        "**O que é fine-tuning?** Pegar um modelo open-source "
+                        "(ex: Qwen 2.5 14B) e re-treinar ele com EXEMPLOS seus "
+                        "(perguntas em PT-BR + respostas como você quer). O "
+                        "modelo resultante fica enviesado pro seu estilo.\n\n"
+                        "**O que precisa?**\n"
+                        "1. Um Mac com Apple Silicon (M1/M2/M3/M4) — usa "
+                        "`mlx-lm` que aproveita a Neural Engine.\n"
+                        "2. Um dataset de exemplos. Mínimo viável: ~200 pares "
+                        "pergunta/resposta. Bom: 1000+. Formato JSONL com "
+                        "`{\"prompt\": \"...\", \"completion\": \"...\"}`.\n"
+                        "3. Tempo: ~30min–2h numa M-series dependendo do "
+                        "tamanho do dataset.\n\n"
+                        "**Passo a passo:**\n"
+                        "1. `pip install mlx-lm`\n"
+                        "2. Coloca seus exemplos em "
+                        "`~/.mtzcode/data/train.jsonl`\n"
+                        "3. Roda `mtzcode finetune` — o comando faz LoRA "
+                        "(adapter pequeno, não re-treina o modelo todo).\n"
+                        "4. O resultado vira um perfil `mtzcode-pt` que você "
+                        "seleciona no topo da UI.\n\n"
+                        "**Dica:** comece SEM fine-tuning. Use o campo "
+                        "\"Contexto pessoal\" pra dar instruções — geralmente "
+                        "isso já resolve 80% dos casos. Fine-tune só se você "
+                        "tem um caso muito específico (jargão da empresa, "
+                        "código numa linguagem rara, estilo MUITO particular)."
+                    ),
+                },
+                {
+                    "title": "Habilidades (tools)",
+                    "body": (
+                        "O modelo tem ~27 habilidades. Principais:\n\n"
+                        "- `read`/`write`/`edit` — manipular arquivos\n"
+                        "- `glob`/`grep`/`search_code` — buscar no projeto\n"
+                        "- `bash` — rodar comandos\n"
+                        "- `find_files`/`find_images` — buscar em qualquer "
+                        "lugar do Mac via Spotlight (super poderes!)\n"
+                        "- `web_fetch`/`web_search` — internet\n"
+                        "- `applescript`/`open_app`/`screenshot` — controle "
+                        "do macOS\n"
+                        "- `docx_read`/`pdf_read`/`xlsx_read` — documentos\n\n"
+                        "Você pode desabilitar habilidades específicas no "
+                        "painel direito (aba HABILIDADES)."
+                    ),
+                },
+                {
+                    "title": "Modo Auto",
+                    "body": (
+                        "Quando ativado (botão ⚡auto no topo), confirmações "
+                        "destrutivas são automáticas. Use quando quiser que o "
+                        "modelo trabalhe sem te interromper a cada `write` ou "
+                        "`bash`. **Cuidado**: ele pode apagar arquivos sem "
+                        "perguntar."
+                    ),
+                },
+            ]
+        }
+
     @app.get("/api/browse")
     def browse_endpoint(path: str | None = None) -> dict[str, Any]:
         """Lista subdiretórios de um path. Se vazio, começa em $HOME.

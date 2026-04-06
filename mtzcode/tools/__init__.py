@@ -21,6 +21,8 @@ from mtzcode.tools.browser import BrowserTool
 from mtzcode.tools.clipboard import ClipboardReadTool, ClipboardWriteTool
 from mtzcode.tools.docx import DocxReadTool, DocxWriteTool
 from mtzcode.tools.edit import EditTool
+from mtzcode.tools.find_files import FindFilesTool
+from mtzcode.tools.find_images import FindImagesTool
 from mtzcode.tools.glob import GlobTool
 from mtzcode.tools.grep import GrepTool
 from mtzcode.tools.notify import NotifyTool
@@ -63,6 +65,11 @@ TOOL_GROUPS: dict[str, list[type[Tool]]] = {
         NotifyTool,
         ScreenshotTool,
         OpenAppTool,
+    ],
+    # SUPERPOWERS: busca em qualquer lugar do disco via Spotlight
+    "superpowers": [
+        FindFilesTool,
+        FindImagesTool,
     ],
     # DOCUMENTS: leitura/escrita de docx, pdf, xlsx, textos longos
     "documents": [
@@ -137,6 +144,8 @@ __all__ = [
     "WriteTool",
     "EditTool",
     "BashTool",
+    "FindFilesTool",
+    "FindImagesTool",
     "GlobTool",
     "GrepTool",
     "SearchCodeTool",
