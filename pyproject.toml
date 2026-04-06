@@ -18,7 +18,19 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
-docs = ["pypdf>=4.0", "python-docx>=1.1"]
+docs = ["pypdf>=4.0", "python-docx>=1.1", "openpyxl>=3.1", "markdown>=3.5", "weasyprint>=60.0"]
+web = ["html2text>=2024.2", "beautifulsoup4>=4.12"]
+browser = ["playwright>=1.40"]
+mcp = ["mcp>=1.0"]
+schedule = ["croniter>=2.0"]
+finetune = ["mlx-lm>=0.20", "datasets>=2.18"]
+all = [
+    "pypdf>=4.0", "python-docx>=1.1", "openpyxl>=3.1", "markdown>=3.5", "weasyprint>=60.0",
+    "html2text>=2024.2", "beautifulsoup4>=4.12",
+    "playwright>=1.40",
+    "mcp>=1.0",
+    "croniter>=2.0",
+]
 
 [project.scripts]
 mtzcode = "mtzcode.cli:main"

@@ -792,6 +792,126 @@ def knowledge_search(
 
 
 @app.command()
+def auto(
+    task: str = typer.Argument(..., help="Tarefa pra executar autonomamente."),
+    profile: str = typer.Option(None, "--profile", "-p", help="Perfil de modelo."),
+    criteria: list[str] = typer.Option(
+        None,
+        "--criteria",
+        "-c",
+        help="Critérios de aceite. Ex: 'file_exists:saida.md' ou 'cmd_zero:pytest'.",
+    ),
+) -> None:
+    """Executa uma tarefa em modo autônomo (sem perguntar nada).
+
+    Confirmações são puladas automaticamente. Comandos perigosos (rm -rf /,
+    sudo rm, force push em main, etc) ainda são bloqueados por uma blocklist.
+    """
+    from mtzcode.auto_cli import run_auto
+
+    try:
+        run_auto(task=task, criteria=list(criteria) if criteria else None, profile_name=profile)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]erro:[/] {exc}")
+        raise typer.Exit(1) from exc
+
+
+schedule_app = typer.Typer(help="Agenda tarefas automáticas (cron) pro mtzcode.")
+app.add_typer(schedule_app, name="schedule")
+
+
+@schedule_app.command("add")
+def schedule_add(
+    name: str = typer.Argument(..., help="Nome curto pra identificar."),
+    cron: str = typer.Argument(..., help="Cron, ex: '0 9 * * 1-5' (9h, dias úteis)."),
+    prompt: str = typer.Argument(..., help="Prompt que será executado."),
+    profile: str = typer.Option(None, "--profile", "-p"),
+) -> None:
+    """Agenda uma tarefa recorrente."""
+    from mtzcode.scheduler.cli_commands import add_task
+
+    task_id = add_task(name=name, cron=cron, prompt=prompt, profile=profile)
+    console.print(f"[green]✓[/] tarefa agendada: [bold]{task_id}[/]")
+
+
+@schedule_app.command("list")
+def schedule_list() -> None:
+    """Lista todas as tarefas agendadas."""
+    from mtzcode.scheduler.cli_commands import list_tasks
+
+    tasks = list_tasks()
+    if not tasks:
+        console.print("[dim]nenhuma tarefa agendada.[/]")
+        return
+    for t in tasks:
+        status = "[green]on[/]" if t.enabled else "[dim]off[/]"
+        console.print(
+            f"  [bold cyan]{t.id}[/] {status} [bold]{t.name}[/]\n"
+            f"    cron: [yellow]{t.cron}[/]   última: [dim]{t.last_run or '—'}[/]\n"
+            f"    [dim]{t.prompt[:80]}{'…' if len(t.prompt) > 80 else ''}[/]"
+        )
+
+
+@schedule_app.command("rm")
+def schedule_rm(task_id: str = typer.Argument(...)) -> None:
+    """Remove uma tarefa agendada."""
+    from mtzcode.scheduler.cli_commands import remove_task
+
+    remove_task(task_id)
+    console.print(f"[green]✓[/] removida: {task_id}")
+
+
+@schedule_app.command("run")
+def schedule_run(task_id: str = typer.Argument(...)) -> None:
+    """Roda uma tarefa agendada agora."""
+    from mtzcode.scheduler.cli_commands import run_task_now
+
+    ok, summary = run_task_now(task_id)
+    style = "green" if ok else "red"
+    console.print(f"[{style}]{'✓' if ok else '✖'}[/] {summary}")
+
+
+daemon_app = typer.Typer(help="Daemon que executa as tarefas agendadas.")
+app.add_typer(daemon_app, name="daemon")
+
+
+@daemon_app.command("run")
+def daemon_run() -> None:
+    """Roda o daemon do scheduler em foreground."""
+    from mtzcode.scheduler.daemon import SchedulerDaemon
+
+    console.print("[dim]daemon iniciado. Ctrl+C pra parar.[/]")
+    SchedulerDaemon().run_forever()
+
+
+@daemon_app.command("install")
+def daemon_install() -> None:
+    """Instala o daemon como launchd agent (macOS)."""
+    from mtzcode.scheduler.daemon import install_launchd
+
+    install_launchd()
+    console.print("[green]✓[/] daemon instalado no launchd.")
+
+
+@daemon_app.command("uninstall")
+def daemon_uninstall() -> None:
+    """Remove o launchd agent."""
+    from mtzcode.scheduler.daemon import uninstall_launchd
+
+    uninstall_launchd()
+    console.print("[green]✓[/] daemon removido.")
+
+
+@daemon_app.command("status")
+def daemon_status_cmd() -> None:
+    """Mostra status do daemon."""
+    from mtzcode.scheduler.daemon import daemon_status
+
+    s = daemon_status()
+    console.print(s)
+
+
+@app.command()
 def version() -> None:
     """Mostra a versão."""
     console.print(f"mtzcode {__version__}")
