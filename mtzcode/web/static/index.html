@@ -963,13 +963,21 @@
     </main>
 
     <footer>
+      <div id="queue-bar" style="display:none;padding:6px 12px 0;font-size:11px;color:var(--text-mute);">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+          <span style="text-transform:uppercase;letter-spacing:.5px;opacity:.7;">Fila</span>
+          <span id="queue-count" style="background:var(--accent);color:#000;border-radius:10px;padding:1px 7px;font-weight:600;">0</span>
+          <button id="queue-clear" class="btn" style="margin-left:auto;font-size:10px;padding:2px 8px;">limpar</button>
+        </div>
+        <div id="queue-list" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+      </div>
       <div class="input-row">
         <textarea id="input" rows="2" placeholder="Pergunte ou peça algo para o mtzcode..."></textarea>
         <button class="btn" id="mic-btn" title="Ditar por voz (clique e fale)">🎤</button>
         <button class="btn primary" id="send-btn">Enviar ↵</button>
       </div>
       <div class="footer-hint">
-        100% local · <span id="status-line">pronto</span>
+        100% local · <span id="status-line">pronto</span> · <span style="opacity:.6;">enquanto roda, novas mensagens entram na fila ↑</span>
       </div>
     </footer>
   </div>
@@ -1037,6 +1045,7 @@
     profile: null,
     cwd: '',
     busy: false,
+    queue: [],
   };
 
   // Endpoints "opcionais" — se 404, marcamos como indisponíveis
@@ -2424,11 +2433,57 @@
   // ============================================================
   // Chat: send / stream
   // ============================================================
+  // ============================================================
+  // Fila de execução — enfileira mensagens enquanto uma roda
+  // ============================================================
+  function renderQueue() {
+    const bar = $('queue-bar');
+    const list = $('queue-list');
+    const count = $('queue-count');
+    if (!state.queue.length) {
+      bar.style.display = 'none';
+      return;
+    }
+    bar.style.display = '';
+    count.textContent = state.queue.length;
+    list.innerHTML = '';
+    state.queue.forEach((msg, i) => {
+      const chip = document.createElement('div');
+      chip.style.cssText = 'display:flex;align-items:center;gap:6px;background:var(--bg-elev-2);border:1px solid var(--border);border-radius:14px;padding:4px 8px 4px 10px;max-width:280px;';
+      const txt = document.createElement('span');
+      txt.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--text);';
+      txt.textContent = `${i + 1}. ${msg}`;
+      txt.title = msg;
+      const x = document.createElement('button');
+      x.textContent = '×';
+      x.style.cssText = 'background:none;border:none;color:var(--text-mute);cursor:pointer;font-size:14px;line-height:1;padding:0 2px;';
+      x.title = 'remover da fila';
+      x.addEventListener('click', () => {
+        state.queue.splice(i, 1);
+        renderQueue();
+      });
+      chip.appendChild(txt);
+      chip.appendChild(x);
+      list.appendChild(chip);
+    });
+  }
+
+  function enqueueMessage(message) {
+    state.queue.push(message);
+    renderQueue();
+    toast(`adicionado à fila (${state.queue.length})`, 'success');
+  }
+
   async function sendMessage() {
-    if (state.busy) return;
     const input = $('input');
     const message = input.value.trim();
     if (!message) return;
+    // Se já tem algo rodando, enfileira em vez de bloquear
+    if (state.busy) {
+      input.value = '';
+      enqueueMessage(message);
+      return;
+    }
     state.busy = true;
     $('send-btn').disabled = true;
     input.value = '';
@@ -2478,6 +2533,14 @@
       input.focus();
       // recarrega sessions, pois pode ter criado uma nova
       loadSessions();
+      // drena a fila — pega próximo e dispara
+      if (state.queue.length) {
+        const next = state.queue.shift();
+        renderQueue();
+        $('input').value = next;
+        // setTimeout pra deixar o DOM respirar entre mensagens
+        setTimeout(() => sendMessage(), 50);
+      }
     }
 
     function handleEvent(ev, body, setCurrent) {
@@ -2609,6 +2672,13 @@
         $('input').value = card.dataset.prompt;
         $('input').focus();
       });
+    });
+
+    // fila
+    $('queue-clear').addEventListener('click', () => {
+      state.queue = [];
+      renderQueue();
+      toast('fila limpa', 'warn');
     });
 
     // input
