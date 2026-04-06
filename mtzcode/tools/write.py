@@ -15,6 +15,7 @@ class WriteArgs(BaseModel):
 
 class WriteTool(Tool):
     name = "write"
+    destructive = True
     description = (
         "Cria um arquivo novo ou substitui completamente o conteúdo de um existente. "
         "Use SOMENTE para arquivos novos ou rewrites totais. "

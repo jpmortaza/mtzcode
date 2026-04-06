@@ -26,6 +26,7 @@ class BashArgs(BaseModel):
 
 class BashTool(Tool):
     name = "bash"
+    destructive = True
     description = (
         "Executa um comando shell no sistema do usuário e retorna stdout/stderr/exit_code. "
         "Use para listar arquivos, rodar testes, git, build, etc. "

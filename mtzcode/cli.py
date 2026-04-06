@@ -1,13 +1,15 @@
-"""CLI do mtzcode — REPL com agent loop e tool calling."""
+"""CLI do mtzcode — REPL com agent loop, streaming, diffs e confirmação destrutiva."""
 from __future__ import annotations
 
 import sys
+from typing import Any
 
 import typer
 from rich.align import Align
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.syntax import Syntax
 from rich.text import Text
 
 from mtzcode import __version__
@@ -37,7 +39,6 @@ _BANNER_ASCII = r"""
 def _banner(cfg: Config, n_tools: int) -> None:
     logo = Text(_BANNER_ASCII, style="bold bright_cyan")
     console.print(Align.center(logo))
-
     signature = Text("by Jean Mortaza", style="italic bright_magenta")
     console.print(Align.center(signature))
     console.print()
@@ -56,34 +57,143 @@ def _banner(cfg: Config, n_tools: int) -> None:
     console.print()
 
 
-def _make_event_handler() -> tuple[callable, callable]:
-    def on_event(ev: AgentEvent) -> None:
-        if ev.kind == "tool_call":
-            args_preview = _preview_args(ev.data["args"])
+# ---------------------------------------------------------------------------
+# Session state — flags compartilhadas entre REPL e callbacks
+# ---------------------------------------------------------------------------
+class SessionState:
+    def __init__(self) -> None:
+        # Tools marcadas como "sempre permitir" nesta sessão
+        self.always_allow: set[str] = set()
+
+    def should_confirm(self, tool_name: str) -> bool:
+        return tool_name not in self.always_allow
+
+
+def _make_confirm_cb(state: SessionState):
+    """Retorna um confirm_cb que pergunta [s/N/sempre] e respeita 'sempre'."""
+
+    def confirm(tool_name: str, args: dict) -> bool:
+        if not state.should_confirm(tool_name):
+            return True
+        args_preview = _preview_args(args)
+        console.print(
+            f"\n[yellow]⚠  confirmação:[/] executar [bold cyan]{tool_name}[/] "
+            f"[dim]{args_preview}[/]?"
+        )
+        try:
+            resp = console.input("[bold]› [/][dim]([/][green]s[/]im / [red]N[/]ão / [cyan]a[/]lways) [dim])[/] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            console.print("[dim](recusado)[/]")
+            return False
+        if resp in {"s", "sim", "y", "yes"}:
+            return True
+        if resp in {"a", "always", "sempre"}:
+            state.always_allow.add(tool_name)
             console.print(
-                f"[dim cyan]→ tool[/] [bold cyan]{ev.data['name']}[/] [dim]{args_preview}[/]"
+                f"[dim](ok — {tool_name} liberada pro resto da sessão)[/]"
             )
-        elif ev.kind == "tool_result":
-            result = ev.data["result"]
-            preview = result if len(result) < 800 else result[:800] + "\n... (truncado)"
+            return True
+        return False
+
+    return confirm
+
+
+# ---------------------------------------------------------------------------
+# Event rendering
+# ---------------------------------------------------------------------------
+class EventRenderer:
+    """Renderiza eventos do agent no terminal. Mantém estado pra streaming."""
+
+    def __init__(self) -> None:
+        self._streaming_text = False
+
+    def handle(self, ev: AgentEvent) -> None:
+        if ev.kind == "text_delta":
+            if not self._streaming_text:
+                console.print("[dim]mtzcode ›[/] ", end="")
+                self._streaming_text = True
+            console.print(
+                ev.data["delta"], end="", markup=False, highlight=False
+            )
+        elif ev.kind == "assistant_text_end":
+            if self._streaming_text:
+                console.print()  # newline pra fechar a linha de streaming
+                self._streaming_text = False
+        elif ev.kind == "assistant_text":
+            # Modo não-streaming — renderiza tudo de uma vez em markdown
             console.print(
                 Panel(
-                    preview,
-                    title=f"resultado: {ev.data['name']}",
+                    Markdown(ev.data["text"]),
+                    border_style="green",
+                    title="mtzcode",
+                )
+            )
+        elif ev.kind == "tool_call":
+            self._close_streaming()
+            args_preview = _preview_args(ev.data["args"])
+            console.print(
+                f"[dim cyan]→ tool[/] [bold cyan]{ev.data['name']}[/] "
+                f"[dim]{args_preview}[/]"
+            )
+        elif ev.kind == "tool_result":
+            self._render_tool_result(ev.data["name"], ev.data["result"])
+        elif ev.kind == "tool_error":
+            self._close_streaming()
+            console.print(f"[red]✖ {ev.data['name']}:[/] {ev.data['error']}")
+        elif ev.kind == "tool_denied":
+            self._close_streaming()
+            console.print(f"[yellow]⊘ {ev.data['name']} recusada pelo usuário[/]")
+        elif ev.kind == "max_iterations":
+            self._close_streaming()
+            console.print(
+                f"[yellow]⚠ atingiu limite de {ev.data['limit']} iterações[/]"
+            )
+
+    def finalize(self, text: str) -> None:
+        if self._streaming_text:
+            console.print()  # fecha a linha
+            self._streaming_text = False
+        # Não re-renderiza o texto final — já foi streamado
+
+    def _close_streaming(self) -> None:
+        if self._streaming_text:
+            console.print()
+            self._streaming_text = False
+
+    def _render_tool_result(self, name: str, result: str) -> None:
+        # Se o resultado contém um diff unified, renderiza com syntax highlight
+        if "--- a/" in result and "+++ b/" in result:
+            header, _, diff_body = result.partition("--- a/")
+            diff_body = "--- a/" + diff_body
+            if header.strip():
+                console.print(f"[dim]{header.strip()}[/]")
+            console.print(
+                Panel(
+                    Syntax(
+                        diff_body,
+                        "diff",
+                        theme="ansi_dark",
+                        background_color="default",
+                        word_wrap=True,
+                    ),
+                    title=f"resultado: {name}",
                     border_style="dim",
                     title_align="left",
                 )
             )
-        elif ev.kind == "tool_error":
-            console.print(f"[red]✖ {ev.data['name']}:[/] {ev.data['error']}")
-        elif ev.kind == "max_iterations":
-            console.print(f"[yellow]⚠ atingiu limite de {ev.data['limit']} iterações[/]")
+            return
 
-    def finalize(text: str) -> None:
-        if text:
-            console.print(Panel(Markdown(text), border_style="green", title="mtzcode"))
-
-    return on_event, finalize
+        preview = (
+            result if len(result) < 800 else result[:800] + "\n... (truncado)"
+        )
+        console.print(
+            Panel(
+                preview,
+                title=f"resultado: {name}",
+                border_style="dim",
+                title_align="left",
+            )
+        )
 
 
 def _preview_args(args: dict) -> str:
@@ -98,6 +208,9 @@ def _preview_args(args: dict) -> str:
     return "(" + ", ".join(parts) + ")"
 
 
+# ---------------------------------------------------------------------------
+# Comandos do REPL
+# ---------------------------------------------------------------------------
 def _show_profiles_menu(current: Profile) -> None:
     console.print()
     console.print("[bold]Perfis disponíveis:[/]")
@@ -112,34 +225,28 @@ def _show_profiles_menu(current: Profile) -> None:
 
 
 def _switch_profile(current: Profile) -> Profile | None:
-    """Mostra menu e devolve o profile escolhido (ou None se cancelado)."""
     _show_profiles_menu(current)
     try:
         choice = console.input(
-            "[bold blue]escolha um perfil (número, ou enter pra cancelar) ›[/] "
+            "[bold blue]escolha um perfil (número, enter pra cancelar) ›[/] "
         ).strip()
     except (EOFError, KeyboardInterrupt):
         return None
-    if not choice:
+    if not choice or not choice.isdigit():
         return None
-    if not choice.isdigit():
-        console.print("[red]entrada inválida[/]")
-        return None
-
     idx = int(choice) - 1
     profiles = list_profiles()
     if idx < 0 or idx >= len(profiles):
         console.print("[red]número fora do intervalo[/]")
         return None
-
     new_profile = profiles[idx]
     if new_profile.name == current.name:
         console.print("[dim]já está nesse perfil.[/]")
         return None
     if not new_profile.is_local:
         console.print(
-            f"[yellow]⚠  Atenção:[/] {new_profile.label} envia seus dados pra um servidor externo. "
-            "Isso quebra a garantia de privacidade local."
+            f"[yellow]⚠  Atenção:[/] {new_profile.label} envia seus dados "
+            "pra um servidor externo. Quebra a garantia de privacidade local."
         )
     return new_profile
 
@@ -154,8 +261,10 @@ def _repl(cfg: Config) -> None:
         console.print(f"[red]erro ao iniciar cliente:[/] {exc}")
         return
 
-    agent = Agent(client, registry, cfg.system_prompt())
-    on_event, finalize = _make_event_handler()
+    state = SessionState()
+    confirm_cb = _make_confirm_cb(state)
+    agent = Agent(client, registry, cfg.system_prompt(), confirm_cb=confirm_cb)
+    renderer = EventRenderer()
 
     try:
         while True:
@@ -172,14 +281,11 @@ def _repl(cfg: Config) -> None:
                 return
             if user_input == "/limpar":
                 agent.reset()
+                state.always_allow.clear()
                 console.print("[dim]histórico limpo.[/]")
                 continue
             if user_input == "/ajuda":
-                console.print(
-                    "[dim]/sair: encerra · /limpar: zera histórico · "
-                    "/modelo: trocar de modelo · /ajuda: esta mensagem[/]\n"
-                    f"[dim]tools disponíveis: {', '.join(registry.names())}[/]"
-                )
+                _print_help(registry)
                 continue
             if user_input in {"/modelo", "/model"}:
                 new_profile = _switch_profile(client.profile)
@@ -200,20 +306,34 @@ def _repl(cfg: Config) -> None:
                 continue
 
             try:
-                with console.status("[dim]pensando...[/]", spinner="dots"):
-                    final_text = agent.run(user_input, on_event=on_event)
+                final_text = agent.run_streaming(
+                    user_input, on_event=renderer.handle
+                )
+                renderer.finalize(final_text)
             except ChatClientError as exc:
-                console.print(f"[red]erro:[/] {exc}")
+                console.print(f"\n[red]erro:[/] {exc}")
                 continue
             except KeyboardInterrupt:
                 console.print("\n[yellow]interrompido.[/]")
                 continue
-
-            finalize(final_text)
     finally:
         client.close()
 
 
+def _print_help(registry) -> None:
+    console.print(
+        "[bold]Comandos do REPL:[/]\n"
+        "  [cyan]/sair[/]    encerra a sessão\n"
+        "  [cyan]/limpar[/]  zera o histórico da conversa\n"
+        "  [cyan]/modelo[/]  troca de modelo (menu interativo)\n"
+        "  [cyan]/ajuda[/]   mostra esta mensagem\n\n"
+        f"[dim]Tools disponíveis: {', '.join(registry.names())}[/]"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Typer app
+# ---------------------------------------------------------------------------
 @app.command()
 def chat(
     profile: str = typer.Option(

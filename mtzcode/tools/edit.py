@@ -1,6 +1,7 @@
 """EditTool — substituição exata de string em um arquivo (estilo Claude Code)."""
 from __future__ import annotations
 
+import difflib
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -25,6 +26,7 @@ class EditArgs(BaseModel):
 
 class EditTool(Tool):
     name = "edit"
+    destructive = True
     description = (
         "Substitui um trecho exato de texto em um arquivo. "
         "Use para mudanças localizadas — leia o arquivo antes para garantir "
@@ -60,12 +62,26 @@ class EditTool(Tool):
 
         if args.replace_all:
             new_text = text.replace(args.old_string, args.new_string)
+            applied = count
         else:
             new_text = text.replace(args.old_string, args.new_string, 1)
+            applied = 1
 
         try:
             p.write_text(new_text, encoding="utf-8")
         except OSError as exc:
             raise ToolError(f"erro escrevendo {p}: {exc}") from exc
 
-        return f"editado: {p} ({count} substituição{'ões' if count > 1 else ''})"
+        # Gera diff unified pro resultado — a CLI detecta e renderiza colorido
+        diff = difflib.unified_diff(
+            text.splitlines(keepends=True),
+            new_text.splitlines(keepends=True),
+            fromfile=f"a/{p.name}",
+            tofile=f"b/{p.name}",
+            n=3,
+        )
+        diff_text = "".join(diff)
+        header = f"editado: {p} ({applied} substituição{'ões' if applied > 1 else ''})\n"
+        if diff_text:
+            return header + "\n" + diff_text
+        return header

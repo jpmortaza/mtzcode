@@ -83,6 +83,52 @@ class ChatClient:
             raise ChatClientError(f"resposta sem choices: {str(data)[:300]}")
         return choices[0].get("message", {}) or {}
 
+    def chat_stream(
+        self,
+        messages: list[dict[str, Any]],
+        tools: Iterable[dict[str, Any]] | None = None,
+    ):
+        """Gera chunks SSE do endpoint `/chat/completions` com `stream=true`.
+
+        Cada item yield-ado é um dict no formato OpenAI streaming, com `choices[0].delta`
+        contendo `content` e/ou `tool_calls` parciais.
+        """
+        payload: dict[str, Any] = {
+            "model": self.profile.model,
+            "messages": _normalize_messages_for_openai(messages),
+            "stream": True,
+        }
+        if tools:
+            payload["tools"] = list(tools)
+
+        try:
+            with self._client.stream("POST", "/chat/completions", json=payload) as response:
+                if response.status_code != 200:
+                    # Tenta ler o body de erro
+                    try:
+                        body = response.read().decode("utf-8", errors="replace")
+                    except Exception:
+                        body = "<erro lendo body>"
+                    raise ChatClientError(
+                        f"{self.profile.label} respondeu {response.status_code}: "
+                        f"{body[:500]}"
+                    )
+                for line in response.iter_lines():
+                    if not line:
+                        continue
+                    if line.startswith("data: "):
+                        data_str = line[6:]
+                        if data_str.strip() == "[DONE]":
+                            break
+                        try:
+                            yield json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
+        except httpx.HTTPError as exc:
+            raise ChatClientError(
+                f"falha ao conectar em {self.profile.base_url}: {exc}"
+            ) from exc
+
     def close(self) -> None:
         self._client.close()
 

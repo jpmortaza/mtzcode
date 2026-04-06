@@ -25,6 +25,8 @@ class Tool(ABC):
     name: ClassVar[str]
     description: ClassVar[str]
     Args: ClassVar[type[BaseModel]]
+    # Tools destrutivas disparam prompt de confirmação antes de executar.
+    destructive: ClassVar[bool] = False
 
     def schema(self) -> dict[str, Any]:
         """Schema OpenAI/Ollama-style para tool calling."""
