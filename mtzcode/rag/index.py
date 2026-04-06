@@ -135,3 +135,9 @@ class Index:
 
     def close(self) -> None:
         self._conn.close()
+
+    def __enter__(self) -> "Index":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()

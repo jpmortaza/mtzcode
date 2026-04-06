@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 import os
+import queue
+import threading
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -49,6 +51,9 @@ class Session:
             cfg.system_prompt(),
             confirm_cb=None,  # sem confirmação — UI pode exigir depois se quiser
         )
+        # Lock garante que requisições concorrentes de /api/chat não interleave
+        # o histórico do mesmo agent.
+        self.chat_lock = threading.Lock()
 
     def switch_profile(self, profile: Profile) -> None:
         new_client = ChatClient(profile, self.cfg.request_timeout_s)
@@ -181,34 +186,54 @@ def create_app() -> FastAPI:
 
     @app.post("/api/chat")
     def chat_endpoint(req: ChatRequest) -> StreamingResponse:
-        """Envia a mensagem pro agent e devolve eventos SSE.
+        """Envia a mensagem pro agent e devolve eventos SSE token-a-token.
 
-        Formato dos eventos: `data: {json}\\n\\n`.
+        Agent roda em thread separada; o gerador consome uma queue de eventos
+        e dá yield imediato, permitindo streaming real.
+
         Kinds: text_delta | tool_call | tool_result | tool_error |
-               assistant_text_end | done | error
+               tool_denied | assistant_text_end | done | error
         """
+        # Sentinela pra sinalizar fim do stream
+        _DONE = object()
+        q: queue.Queue = queue.Queue()
+
+        def serialize(kind: str, data: dict) -> str:
+            return json.dumps({"kind": kind, "data": data})
+
+        def on_event(ev: AgentEvent) -> None:
+            q.put(("event", serialize(ev.kind, ev.data)))
+
+        def worker() -> None:
+            """Roda o agent na thread. Adquire lock pra não interleave com
+            outras requisições simultâneas que compartilham o mesmo Session.
+            """
+            with session.chat_lock:
+                try:
+                    final = session.agent.run_streaming(
+                        req.message, on_event=on_event
+                    )
+                    q.put(("event", serialize("done", {"text": final})))
+                except ChatClientError as exc:
+                    q.put(("event", serialize("error", {"message": str(exc)})))
+                except Exception as exc:  # noqa: BLE001
+                    q.put(("event", serialize("error", {"message": str(exc)})))
+                finally:
+                    q.put(("done", _DONE))
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+
         def event_stream():
-            def serialize(ev: AgentEvent) -> str:
-                return json.dumps({"kind": ev.kind, "data": ev.data})
-
-            buffer: list[str] = []
-
-            def on_event(ev: AgentEvent) -> None:
-                buffer.append(serialize(ev))
-
-            # Rodamos o agent e bufferizamos eventos. Streaming verdadeiro
-            # exigiria thread/queue — MVP primeiro.
-            try:
-                final = session.agent.run_streaming(req.message, on_event=on_event)
-                for payload in buffer:
-                    yield f"data: {payload}\n\n"
-                yield f"data: {json.dumps({'kind': 'done', 'data': {'text': final}})}\n\n"
-            except ChatClientError as exc:
-                err = json.dumps({"kind": "error", "data": {"message": str(exc)}})
-                yield f"data: {err}\n\n"
-            except Exception as exc:  # noqa: BLE001
-                err = json.dumps({"kind": "error", "data": {"message": str(exc)}})
-                yield f"data: {err}\n\n"
+            while True:
+                try:
+                    kind, payload = q.get(timeout=600)
+                except queue.Empty:
+                    yield "data: {\"kind\":\"error\",\"data\":{\"message\":\"timeout\"}}\n\n"
+                    return
+                if kind == "done":
+                    return
+                yield f"data: {payload}\n\n"
 
         return StreamingResponse(
             event_stream(),

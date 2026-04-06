@@ -263,10 +263,15 @@ class Agent:
 def _extract_tool_calls_from_content(content: str) -> tuple[list[dict[str, Any]], str]:
     """Tenta extrair tool calls de um content textual.
 
-    Cobre três formatos comuns que modelos open-source emitem:
+    Cobre formatos comuns que modelos open-source emitem:
       1. <tool_call>{"name": "...", "arguments": {...}}</tool_call>  (template Qwen)
       2. JSON nu no content: {"name": "...", "arguments": {...}}
       3. Array JSON: [{"name": "..."}, {"name": "..."}]
+      4. Múltiplos objetos concatenados sem separador (Qwen Q4 às vezes faz)
+      5. JSON dentro de code fences ```json ... ```
+
+    Retorna (tool_calls, leftover_text). Apenas objetos com `name` são tratados
+    como tool calls; os demais viram parte do leftover_text.
     """
     tag_matches = _TOOL_CALL_TAG_RE.findall(content)
     if tag_matches:
@@ -279,25 +284,97 @@ def _extract_tool_calls_from_content(content: str) -> tuple[list[dict[str, Any]]
         if calls:
             return calls, leftover
 
+    # Remove code fences se presentes
     stripped = content.strip()
     if stripped.startswith("```"):
         stripped = re.sub(r"^```(?:json)?\s*", "", stripped)
         stripped = re.sub(r"\s*```$", "", stripped)
+
+    # Tenta primeiro parsear o content INTEIRO como JSON único (caminho mais limpo)
     try:
         data = json.loads(stripped)
+        if isinstance(data, dict):
+            parsed = _normalize_call_dict(data)
+            return ([parsed], "") if parsed else ([], content)
+        if isinstance(data, list):
+            all_calls = [
+                c
+                for c in (_normalize_call_dict(d) for d in data if isinstance(d, dict))
+                if c
+            ]
+            return (all_calls, "") if all_calls else ([], content)
     except json.JSONDecodeError:
-        return [], content
+        pass
 
-    if isinstance(data, dict):
-        parsed = _normalize_call_dict(data)
-        return ([parsed], "") if parsed else ([], content)
-    if isinstance(data, list):
-        calls = [
-            c for c in (_normalize_call_dict(d) for d in data if isinstance(d, dict)) if c
-        ]
-        return (calls, "") if calls else ([], content)
+    # Fallback: extrair múltiplos objetos JSON concatenados do content
+    # (caso em que Qwen Q4 emite `{...}{...}` sem separador)
+    objects = _extract_top_level_json_objects(stripped)
+    if objects:
+        calls: list[dict[str, Any]] = []
+        remaining_text_parts: list[str] = []
+        for obj_str in objects:
+            try:
+                data = json.loads(obj_str)
+            except json.JSONDecodeError:
+                remaining_text_parts.append(obj_str)
+                continue
+            if isinstance(data, dict):
+                parsed = _normalize_call_dict(data)
+                if parsed:
+                    calls.append(parsed)
+                    continue
+                # Dict sem `name` — pode ser resposta estruturada do modelo
+                # Usa o valor de "message"/"content"/"text" se houver
+                msg = (
+                    data.get("message")
+                    or data.get("content")
+                    or data.get("text")
+                )
+                if isinstance(msg, str):
+                    remaining_text_parts.append(msg)
+                else:
+                    remaining_text_parts.append(obj_str)
+            else:
+                remaining_text_parts.append(obj_str)
+        if calls:
+            return calls, "\n".join(remaining_text_parts).strip()
 
     return [], content
+
+
+def _extract_top_level_json_objects(text: str) -> list[str]:
+    """Extrai objetos JSON top-level de um texto, contando chaves balanceadas.
+
+    Retorna lista de substrings '{...}' que parecem objetos JSON válidos.
+    Útil quando o modelo emite múltiplos objetos concatenados sem vírgula.
+    """
+    objects: list[str] = []
+    depth = 0
+    start = -1
+    in_string = False
+    escape = False
+    for i, ch in enumerate(text):
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"' and not escape:
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start >= 0:
+                objects.append(text[start : i + 1])
+                start = -1
+    return objects
 
 
 def _parse_call_json(raw: str) -> dict[str, Any] | None:

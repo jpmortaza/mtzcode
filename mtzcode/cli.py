@@ -369,6 +369,12 @@ def _repl(cfg: Config) -> None:
                     "liberadas novamente (ainda pedem confirmação)."
                 )
                 continue
+            if user_input in {"/indexar", "/index"}:
+                try:
+                    _index_cwd()
+                except Exception as exc:  # noqa: BLE001
+                    console.print(f"[red]erro indexando:[/] {exc}")
+                continue
 
             # --- slash commands customizados ---
             parsed = parse_slash(user_input)
@@ -404,6 +410,35 @@ def _repl(cfg: Config) -> None:
         client.close()
 
 
+def _index_cwd() -> None:
+    """Indexa o cwd atual — usado pelo /indexar do REPL."""
+    from mtzcode.rag import EmbeddingClient, Index, ProjectIndexer
+
+    root = Path.cwd()
+    db_path = root / ".mtzcode" / "index.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    console.print(f"[dim]indexando {root}[/]")
+
+    embedder = EmbeddingClient()
+    idx = Index(db_path)
+    indexer = ProjectIndexer(root, idx, embedder)
+    try:
+        with console.status("[dim]indexando...[/]", spinner="dots") as status:
+            def on_progress(p, rel):
+                status.update(
+                    f"[dim]{p.files_indexed} arquivos / {p.chunks_created} chunks — {rel}[/]"
+                )
+            progress = indexer.index_project(on_progress=on_progress)
+    finally:
+        idx.close()
+        embedder.close()
+
+    console.print(
+        f"[green]✓[/] {progress.files_indexed} arquivos, "
+        f"{progress.chunks_created} chunks"
+    )
+
+
 def _print_help(registry, custom_commands: dict[str, SlashCommand] | None = None) -> None:
     console.print(
         "[bold]Comandos do REPL:[/]\n"
@@ -412,6 +447,7 @@ def _print_help(registry, custom_commands: dict[str, SlashCommand] | None = None
         "  [cyan]/modelo[/]     troca de modelo (menu interativo)\n"
         "  [cyan]/plano[/]      ativa modo de planejamento (sem tools destrutivas)\n"
         "  [cyan]/executar[/]   sai do modo plano\n"
+        "  [cyan]/indexar[/]    gera embeddings do projeto pra search_code\n"
         "  [cyan]/ajuda[/]      mostra esta mensagem\n"
     )
     if custom_commands:
@@ -462,6 +498,74 @@ def profiles() -> None:
             f"  [dim]modelo:[/] {p.model}\n"
             f"  [dim]host:[/]   {p.base_url}\n"
         )
+
+
+@app.command()
+def index(
+    path: str = typer.Option(
+        ".", "--path", "-p", help="Diretório raiz a indexar (default: cwd)."
+    ),
+    clear: bool = typer.Option(
+        False, "--clear", help="Apaga o índice antes de reindexar."
+    ),
+) -> None:
+    """Indexa o projeto pra busca semântica (RAG).
+
+    Gera embeddings locais via nomic-embed-text e persiste em
+    `<root>/.mtzcode/index.db`. Reindexa incremental: só toca arquivos
+    modificados desde a última rodada.
+    """
+    from mtzcode.rag import EmbeddingClient, EmbeddingError, Index, ProjectIndexer
+
+    root = Path(path).expanduser().resolve()
+    if not root.exists() or not root.is_dir():
+        console.print(f"[red]diretório inválido:[/] {root}")
+        raise typer.Exit(1)
+
+    db_path = root / ".mtzcode" / "index.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    console.print(
+        f"[dim]raiz:[/] {root}\n[dim]índice:[/] {db_path}\n"
+    )
+
+    try:
+        embedder = EmbeddingClient()
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]erro iniciando embedder:[/] {exc}")
+        raise typer.Exit(1) from exc
+
+    idx = Index(db_path)
+    if clear:
+        idx.clear()
+        console.print("[dim]índice limpo.[/]")
+
+    indexer = ProjectIndexer(root, idx, embedder)
+
+    try:
+        with console.status("[dim]indexando...[/]", spinner="dots") as status:
+            def on_progress(p, rel):
+                status.update(
+                    f"[dim]indexando {p.files_indexed} arquivos / "
+                    f"{p.chunks_created} chunks — último: {rel}[/]"
+                )
+            progress = indexer.index_project(on_progress=on_progress)
+    except EmbeddingError as exc:
+        console.print(f"[red]erro no embedder:[/] {exc}")
+        raise typer.Exit(1) from exc
+    finally:
+        idx.close()
+        embedder.close()
+
+    stats = Index(db_path).stats()
+    console.print(
+        f"[green]✓ indexado[/]\n"
+        f"  arquivos indexados: [bold]{progress.files_indexed}[/] "
+        f"de {progress.files_scanned} escaneados\n"
+        f"  chunks criados:     [bold]{progress.chunks_created}[/]\n"
+        f"  arquivos pulados:   [dim]{progress.files_skipped}[/]\n"
+        f"  tamanho do índice:  [dim]{stats.db_size_bytes / 1024:.0f} KB[/]"
+    )
 
 
 @app.command()
