@@ -1868,6 +1868,16 @@
           <input type="file" id="tr-file-input" multiple accept=".jsonl,.json,.txt,.md" style="display:none;" />
         </div>
         <div id="tr-datasets-list" style="margin-top:14px;"></div>
+        <div style="margin-top:14px;padding:10px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-elev-2);">
+          <div style="font-size:12px;color:var(--text);margin-bottom:6px;"><strong>Não tem train.jsonl ainda?</strong></div>
+          <div style="font-size:11px;color:var(--text-mute);margin-bottom:8px;line-height:1.5;">
+            Se você subiu raw files (Pirá, wiki, QA, ou texto puro), clique abaixo
+            pra gerar <code>formatted/train.jsonl</code> e <code>valid.jsonl</code>
+            automaticamente. Aceita ShareGPT, <code>{question, answer}</code> ou <code>{text, title}</code>.
+          </div>
+          <button class="btn" id="tr-format-btn">⚙ Formatar agora (raw → train.jsonl)</button>
+          <div id="tr-format-out" style="margin-top:8px;font-size:11px;font-family:var(--mono);color:var(--text-dim);"></div>
+        </div>
       </div>
 
       <!-- TRAIN -->
@@ -2077,6 +2087,28 @@
       }
       refreshDatasets();
     }
+
+    // formatar raw → train.jsonl
+    m.querySelector('#tr-format-btn').addEventListener('click', async () => {
+      const out = m.querySelector('#tr-format-out');
+      const btn = m.querySelector('#tr-format-btn');
+      btn.disabled = true;
+      out.textContent = 'formatando...';
+      try {
+        const res = await api('/api/training/format', { method: 'POST' });
+        const lines = [`✓ train: ${res.train} exemplos`, `✓ valid: ${res.valid} exemplos`];
+        if (res.per_file) {
+          for (const [k, v] of Object.entries(res.per_file)) lines.push(`  ${k}: ${v}`);
+        }
+        out.textContent = lines.join('\n');
+        toast('dataset formatado — pronto pra treinar', 'success');
+      } catch (e) {
+        out.textContent = 'erro: ' + e.message;
+        toast('falha ao formatar: ' + e.message, 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    });
 
     // start/stop
     m.querySelector('#tr-start').addEventListener('click', async () => {

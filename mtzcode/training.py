@@ -174,6 +174,68 @@ def save_dataset(filename: str, content: bytes) -> dict[str, Any]:
     }
 
 
+def format_datasets(val_ratio: float = 0.05, seed: int = 42) -> dict[str, Any]:
+    """Roda o pipeline format_data — converte raw/*.jsonl em train/valid.jsonl.
+
+    Usado pelo botão "Formatar agora" da UI quando o usuário tem datasets
+    brutos (Pirá, wiki, OSCAR, próprios logs) mas ainda não rodou o
+    formatter. Não exige subir um train.jsonl pronto.
+    """
+    _ensure_dirs()
+    import random as _random
+    from mtzcode.finetune import format_data as _fd
+
+    raw_files = sorted(RAW_DIR.glob("*.jsonl"))
+    if not raw_files:
+        raise RuntimeError(
+            "nenhum .jsonl em raw/. Suba um arquivo em Datasets primeiro "
+            "(formato ShareGPT, QA com question/answer, ou texto puro com "
+            "campo 'text')."
+        )
+
+    rng = _random.Random(seed)
+    examples: list[dict[str, Any]] = []
+    per_file: dict[str, int] = {}
+    for raw_file in raw_files:
+        count = 0
+        for row in _fd._iter_raw_file(raw_file):
+            ex: dict[str, Any] | None
+            if "conversations" in row:
+                # já está em ShareGPT — passa direto
+                ex = row
+            elif "question" in row and "answer" in row:
+                ex = _fd._format_qa(row)
+            elif "text" in row:
+                ex = _fd._format_text(row, rng)
+            else:
+                ex = None
+            if ex is not None:
+                examples.append(ex)
+                count += 1
+        per_file[raw_file.name] = count
+
+    if not examples:
+        raise RuntimeError(
+            "nenhum exemplo válido foi gerado. Verifique se os arquivos têm "
+            "o formato esperado (ShareGPT, QA ou texto puro)."
+        )
+
+    rng.shuffle(examples)
+    train, valid = _fd.split_train_valid(examples, val_ratio)
+    train_path = FORMATTED_DIR / "train.jsonl"
+    valid_path = FORMATTED_DIR / "valid.jsonl"
+    n_train = _fd._write_jsonl(train_path, train)
+    n_valid = _fd._write_jsonl(valid_path, valid)
+    return {
+        "ok": True,
+        "train": n_train,
+        "valid": n_valid,
+        "per_file": per_file,
+        "train_path": str(train_path),
+        "valid_path": str(valid_path),
+    }
+
+
 def delete_dataset(filename: str) -> bool:
     """Apaga um dataset por nome (sanitizado)."""
     _ensure_dirs()

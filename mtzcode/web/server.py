@@ -523,6 +523,14 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "file": info}
 
+    @app.post("/api/training/format")
+    def training_format() -> dict[str, Any]:
+        from mtzcode import training as _t
+        try:
+            return _t.format_datasets()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.delete("/api/training/datasets/{filename}")
     def training_delete_dataset(filename: str) -> dict[str, Any]:
         from mtzcode import training as _t
