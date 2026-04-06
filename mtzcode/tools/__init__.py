@@ -14,6 +14,11 @@ from __future__ import annotations
 
 import os
 
+from mtzcode.tools.apify import (
+    ApifyGetDatasetTool,
+    ApifyListActorsTool,
+    ApifyRunActorTool,
+)
 from mtzcode.tools.applescript import AppleScriptTool
 from mtzcode.tools.bash import BashTool
 from mtzcode.tools.base import Tool, ToolError, ToolRegistry
@@ -57,6 +62,8 @@ TOOL_GROUPS: dict[str, list[type[Tool]]] = {
     ],
     # WEB: pesquisa e navegador real
     "web": [WebSearchTool, BrowserTool],
+    # APIFY: scraping/automação via plataforma Apify (precisa APIFY_API_KEY)
+    "apify": [ApifyRunActorTool, ApifyListActorsTool, ApifyGetDatasetTool],
     # MACOS: controle do sistema (apps, notificações, clipboard, screenshot)
     "macos": [
         AppleScriptTool,
@@ -167,4 +174,7 @@ __all__ = [
     "XlsxReadTool",
     "XlsxWriteTool",
     "TextWriterTool",
+    "ApifyRunActorTool",
+    "ApifyListActorsTool",
+    "ApifyGetDatasetTool",
 ]

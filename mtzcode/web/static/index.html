@@ -1840,6 +1840,8 @@
       <input id="st-groq" type="password" placeholder="${ak.GROQ_API_KEY === '***' ? '(definida)' : 'gsk_...'}" value="${ak.GROQ_API_KEY === '***' ? '***' : ''}" />
       <label style="text-transform:none;font-size:12px;margin-top:8px;">MARITACA_API_KEY</label>
       <input id="st-maritaca" type="password" placeholder="${ak.MARITACA_API_KEY === '***' ? '(definida)' : '...'}" value="${ak.MARITACA_API_KEY === '***' ? '***' : ''}" />
+      <label style="text-transform:none;font-size:12px;margin-top:8px;">APIFY_API_KEY <span style="opacity:.6;font-weight:400;">— scraping/automação (apify.com)</span></label>
+      <input id="st-apify" type="password" placeholder="${ak.APIFY_API_KEY === '***' ? '(definida)' : 'apify_api_...'}" value="${ak.APIFY_API_KEY === '***' ? '***' : ''}" />
 
       <label style="margin-top:18px;">⚙ Opções do modelo (Ollama)</label>
       <div class="row">
@@ -1883,6 +1885,7 @@
         api_keys: {
           GROQ_API_KEY: m.querySelector('#st-groq').value,
           MARITACA_API_KEY: m.querySelector('#st-maritaca').value,
+          APIFY_API_KEY: m.querySelector('#st-apify').value,
         },
         model_options: {
           temperature: parseFloat(m.querySelector('#st-temp').value) || 0.3,

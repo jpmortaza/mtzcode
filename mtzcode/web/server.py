@@ -447,11 +447,44 @@ def create_app() -> FastAPI:
                         "- `find_files`/`find_images` — buscar em qualquer "
                         "lugar do Mac via Spotlight (super poderes!)\n"
                         "- `web_fetch`/`web_search` — internet\n"
+                        "- `apify_run_actor`/`apify_list_actors` — scraping "
+                        "via Apify (Google Maps, Instagram, Amazon, etc)\n"
                         "- `applescript`/`open_app`/`screenshot` — controle "
                         "do macOS\n"
                         "- `docx_read`/`pdf_read`/`xlsx_read` — documentos\n\n"
                         "Você pode desabilitar habilidades específicas no "
                         "painel direito (aba HABILIDADES)."
+                    ),
+                },
+                {
+                    "title": "Apify (scraping/automação)",
+                    "body": (
+                        "**Apify** é uma plataforma de scraping com milhares "
+                        "de actors prontos: Google Maps, Instagram, Amazon, "
+                        "TikTok, LinkedIn, Twitter, etc.\n\n"
+                        "**Setup:**\n"
+                        "1. Crie conta em https://apify.com (tem free tier).\n"
+                        "2. Pegue sua API key em "
+                        "https://console.apify.com/account/integrations\n"
+                        "3. Cole em **Configurações > API Keys > "
+                        "APIFY_API_KEY**.\n\n"
+                        "**Tools disponíveis:**\n"
+                        "- `apify_list_actors` — descobre actors. Sem busca, "
+                        "lista os seus; com `search='instagram'` busca na "
+                        "store pública.\n"
+                        "- `apify_run_actor` — roda um actor passando o "
+                        "input JSON dele e devolve o dataset.\n"
+                        "- `apify_get_dataset` — relê itens de uma run "
+                        "anterior por dataset_id.\n\n"
+                        "**Exemplo de uso:** \"Use o Apify pra pegar as 5 "
+                        "primeiras pizzarias de SP no Google Maps\" → o "
+                        "modelo chama `apify_run_actor` com "
+                        "`actor_id='compass/crawler-google-places'` e "
+                        "`input={\"searchStringsArray\": [\"pizzaria SP\"], "
+                        "\"maxCrawledPlaces\": 5}`.\n\n"
+                        "**Custos:** cada run consome créditos da sua conta "
+                        "Apify (não da OpenAI/Ollama). Free tier dá ~5 USD "
+                        "de créditos por mês."
                     ),
                 },
                 {
