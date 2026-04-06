@@ -222,6 +222,104 @@ def load_session(path: Path) -> list[dict]:
     return events
 
 
+def events_to_history(events: list[dict]) -> list[dict[str, Any]]:
+    """Converte eventos de sessão num ``history`` pronto pro Agent.
+
+    Pega só user_message + done/assistant_text + tool_result. text_delta
+    e tool_call são ignorados (são intermediários, ``done`` já tem o texto
+    final). Reutilizado pelo /api/sessions/{id}/resume e pelo CLI --resume.
+    """
+    history: list[dict[str, Any]] = []
+    for ev in events:
+        kind = ev.get("kind")
+        data = ev.get("data") or {}
+        if kind == "user_message":
+            text = data.get("text", "")
+            if text:
+                history.append({"role": "user", "content": text})
+        elif kind == "assistant_text":
+            text = data.get("text", "")
+            if text:
+                history.append({"role": "assistant", "content": text})
+        elif kind == "done":
+            text = data.get("text", "")
+            if text and (
+                not history
+                or history[-1].get("content") != text
+                or history[-1].get("role") != "assistant"
+            ):
+                history.append({"role": "assistant", "content": text})
+        elif kind == "tool_result":
+            name = data.get("name", "")
+            result = data.get("result", "")
+            history.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": f"call_{name}",
+                    "name": name,
+                    "content": str(result),
+                }
+            )
+    return history
+
+
+def latest_session_for_cwd(
+    cwd: str | Path,
+    log_dir: Path | None = None,
+) -> dict | None:
+    """Devolve o info da sessão mais recente cuja meta 'cwd' bate com o cwd.
+
+    Se nenhuma sessão tiver meta cwd salva, devolve a mais recente em geral
+    como fallback (menos preciso, mas melhor que nada).
+    """
+    base = Path(log_dir) if log_dir is not None else DEFAULT_LOG_DIR
+    if not base.exists():
+        return None
+    target = str(Path(cwd).expanduser().resolve())
+    fallback: dict | None = None
+    for path in sorted(base.glob("session-*.jsonl"), reverse=True):
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                meta_cwd: str | None = None
+                first_user: str | None = None
+                ts: str | None = None
+                for i, line in enumerate(fh):
+                    if i >= 30:
+                        break
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if ts is None:
+                        ts = record.get("ts")
+                    if record.get("kind") == "meta":
+                        d = record.get("data") or {}
+                        if d.get("key") == "cwd":
+                            meta_cwd = str(d.get("value") or "")
+                    if (
+                        first_user is None
+                        and record.get("kind") == "user_message"
+                    ):
+                        first_user = (record.get("data") or {}).get("text")
+        except OSError:
+            continue
+        info = {
+            "path": str(path),
+            "name": path.name,
+            "ts": ts,
+            "first_user_message": first_user,
+            "cwd": meta_cwd,
+        }
+        if meta_cwd == target:
+            return info
+        if fallback is None:
+            fallback = info
+    return fallback
+
+
 # ----------------------------------------------------------------------
 # Utilitários
 # ----------------------------------------------------------------------

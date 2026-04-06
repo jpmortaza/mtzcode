@@ -20,6 +20,13 @@ from mtzcode.client import ChatClient, ChatClientError
 from mtzcode.commands import SlashCommand, commands_dir, load_commands, parse_slash
 from mtzcode.config import Config
 from mtzcode.profiles import PROFILES, Profile, get_profile, list_profiles
+from mtzcode.session_log import (
+    SessionLogger,
+    events_to_history,
+    latest_session_for_cwd,
+    load_session,
+    make_event_callback,
+)
 from mtzcode.skills import Skill, load_skills, skills_dirs
 from mtzcode.tools import default_registry
 
@@ -282,7 +289,7 @@ def _switch_profile(current: Profile) -> Profile | None:
     return new_profile
 
 
-def _repl(cfg: Config) -> None:
+def _repl(cfg: Config, resume: bool = False, ask_resume: bool = True) -> None:
     registry = default_registry()
     _banner(cfg, len(registry))
 
@@ -297,6 +304,52 @@ def _repl(cfg: Config) -> None:
     default_prompt = cfg.system_prompt()
     agent = Agent(client, registry, default_prompt, confirm_cb=confirm_cb)
     renderer = EventRenderer()
+
+    # ------------------------------------------------------------------
+    # Session log + auto-resume
+    # ------------------------------------------------------------------
+    cwd_now = str(Path.cwd().resolve())
+    session_logger = SessionLogger()
+    session_logger.log_meta("cwd", cwd_now)
+    session_logger.log_meta("profile", cfg.profile.name)
+    session_logger.log_meta("model", cfg.profile.model)
+
+    # Tenta achar a sessão anterior deste cwd e oferecer retomar
+    prev = latest_session_for_cwd(cwd_now)
+    # Ignora a sessão que acabou de ser criada (mesmo path)
+    if prev and prev.get("path") == str(session_logger.path):
+        prev = None
+
+    should_resume = False
+    if prev:
+        if resume:
+            should_resume = True
+        elif ask_resume:
+            preview = (prev.get("first_user_message") or "").strip()
+            if len(preview) > 60:
+                preview = preview[:57] + "..."
+            console.print(
+                f"[dim]última sessão neste cwd:[/] [cyan]{prev.get('ts')}[/]"
+                + (f" — [italic]{preview}[/]" if preview else "")
+            )
+            try:
+                ans = console.input("[bold]retomar? [s/N] [/]").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                ans = ""
+            should_resume = ans in {"s", "sim", "y", "yes"}
+
+    if should_resume and prev:
+        try:
+            events = load_session(Path(prev["path"]))
+            history = events_to_history(events)
+            agent.history = [{"role": "system", "content": default_prompt}] + history
+            n_user = sum(1 for h in history if h.get("role") == "user")
+            console.print(
+                f"[green]sessão retomada[/] — {len(history)} mensagens "
+                f"({n_user} do usuário)\n"
+            )
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[yellow]falha ao retomar sessão:[/] {exc}")
 
     # Carrega slash commands customizados do usuário
     custom_commands = load_commands()
@@ -384,6 +437,45 @@ def _repl(cfg: Config) -> None:
                     "liberadas novamente (ainda pedem confirmação)."
                 )
                 continue
+            if user_input in {"/retomar", "/resume"}:
+                from mtzcode.session_log import list_sessions
+                items = list_sessions()
+                if not items:
+                    console.print("[dim]nenhuma sessão salva ainda.[/]")
+                    continue
+                console.print("[bold]sessões recentes:[/]")
+                for i, s in enumerate(items[:10], start=1):
+                    preview = (s.get("first_user_message") or "").strip()
+                    if len(preview) > 60:
+                        preview = preview[:57] + "..."
+                    console.print(
+                        f"  [cyan]{i}[/]. {s.get('ts')}"
+                        + (f" — [italic dim]{preview}[/]" if preview else "")
+                    )
+                try:
+                    pick = console.input("[bold]número (ou Enter pra cancelar): [/]").strip()
+                except (EOFError, KeyboardInterrupt):
+                    continue
+                if not pick:
+                    continue
+                try:
+                    idx = int(pick) - 1
+                    target = items[idx]
+                except (ValueError, IndexError):
+                    console.print("[red]escolha inválida.[/]")
+                    continue
+                try:
+                    events = load_session(Path(target["path"]))
+                    history = events_to_history(events)
+                    agent.history = [{"role": "system", "content": default_prompt}] + history
+                    n_user = sum(1 for h in history if h.get("role") == "user")
+                    console.print(
+                        f"[green]sessão retomada[/] — {len(history)} mensagens "
+                        f"({n_user} do usuário)"
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    console.print(f"[red]falha:[/] {exc}")
+                continue
             if user_input in {"/indexar", "/index"}:
                 try:
                     _index_cwd()
@@ -439,8 +531,15 @@ def _repl(cfg: Config) -> None:
 
             # --- turno do agent ---
             try:
+                session_logger.log_user(user_input)
+            except Exception:
+                pass
+
+            on_event = make_event_callback(session_logger, renderer.handle)
+
+            try:
                 final_text = agent.run_streaming(
-                    user_input, on_event=renderer.handle
+                    user_input, on_event=on_event
                 )
                 renderer.finalize(final_text)
             except ChatClientError as exc:
@@ -451,6 +550,10 @@ def _repl(cfg: Config) -> None:
                 continue
     finally:
         client.close()
+        try:
+            session_logger.close()
+        except Exception:
+            pass
 
 
 def _index_cwd() -> None:
@@ -513,6 +616,7 @@ def _print_help(registry, custom_commands: dict[str, SlashCommand] | None = None
         "  [cyan]/plano[/]      ativa modo de planejamento (sem tools destrutivas)\n"
         "  [cyan]/executar[/]   sai do modo plano\n"
         "  [cyan]/indexar[/]    gera embeddings do projeto pra search_code\n"
+        "  [cyan]/retomar[/]    lista sessões anteriores e retoma uma\n"
         "  [cyan]/skill[/]      lista ou ativa skills (ex: /skill python-expert)\n"
         "  [cyan]/ajuda[/]      mostra esta mensagem\n"
     )
@@ -541,6 +645,17 @@ def chat(
         "-p",
         help=f"Perfil de modelo. Disponíveis: {', '.join(PROFILES)}",
     ),
+    resume: bool = typer.Option(
+        False,
+        "--resume",
+        "-r",
+        help="Retoma a última sessão deste cwd automaticamente.",
+    ),
+    no_resume_prompt: bool = typer.Option(
+        False,
+        "--no-resume-prompt",
+        help="Não pergunta sobre retomar a sessão (default pergunta se houver).",
+    ),
 ) -> None:
     """Abre o REPL interativo do mtzcode."""
     cfg = Config.load()
@@ -550,7 +665,7 @@ def chat(
         except KeyError as exc:
             console.print(f"[red]{exc}[/]")
             raise typer.Exit(1) from exc
-    _repl(cfg)
+    _repl(cfg, resume=resume, ask_resume=not no_resume_prompt)
 
 
 @app.command()

@@ -41,6 +41,7 @@ from mtzcode.tools.notify import NotifyTool
 from mtzcode.tools.open_app import OpenAppTool
 from mtzcode.tools.open_url import OpenUrlTool
 from mtzcode.tools.pdf import PdfFromMarkdownTool, PdfReadTool
+from mtzcode.tools.python_exec import PythonExecTool
 from mtzcode.tools.read import ReadTool
 from mtzcode.tools.screenshot import ScreenshotTool
 from mtzcode.tools.search import SearchCodeTool
@@ -64,6 +65,7 @@ TOOL_GROUPS: dict[str, list[type[Tool]]] = {
         SearchCodeTool,
         SearchKnowledgeTool,
         BashTool,
+        PythonExecTool,
         WebFetchTool,
         OpenUrlTool,
     ],
@@ -166,6 +168,7 @@ __all__ = [
     "WriteTool",
     "EditTool",
     "BashTool",
+    "PythonExecTool",
     "FindFilesTool",
     "FindImagesTool",
     "GlobTool",

@@ -908,48 +908,11 @@ def create_app() -> FastAPI:
         if path is None or not path.exists():
             raise HTTPException(status_code=404, detail="sessão não encontrada")
         events = _load_session(path)
-
+        from mtzcode.session_log import events_to_history
+        history = events_to_history(events)
         with session.chat_lock:
             session.agent.reset()
-            for ev in events:
-                kind = ev.get("kind")
-                data = ev.get("data") or {}
-                if kind == "user_message":
-                    text = data.get("text", "")
-                    if text:
-                        session.agent.history.append(
-                            {"role": "user", "content": text}
-                        )
-                elif kind == "assistant_text":
-                    text = data.get("text", "")
-                    if text:
-                        session.agent.history.append(
-                            {"role": "assistant", "content": text}
-                        )
-                elif kind == "done":
-                    text = data.get("text", "")
-                    # Só adiciona se ainda não tem o último assistant igual.
-                    if text and (
-                        not session.agent.history
-                        or session.agent.history[-1].get("content") != text
-                        or session.agent.history[-1].get("role") != "assistant"
-                    ):
-                        session.agent.history.append(
-                            {"role": "assistant", "content": text}
-                        )
-                elif kind == "tool_result":
-                    name = data.get("name", "")
-                    result = data.get("result", "")
-                    session.agent.history.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": f"call_{name}",
-                            "name": name,
-                            "content": str(result),
-                        }
-                    )
-                # text_delta e demais são ignorados — só usamos eventos finais.
-
+            session.agent.history.extend(history)
         return {"ok": True, "id": session_id, "messages": len(session.agent.history)}
 
     @app.delete("/api/sessions/{session_id}")
