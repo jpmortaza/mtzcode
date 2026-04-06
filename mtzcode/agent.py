@@ -204,6 +204,11 @@ class Agent:
         """
         content = ""
         tool_calls_by_idx: dict[int, dict[str, Any]] = {}
+        # Estado pra suprimir streaming visual quando o modelo começa a
+        # emitir um bloco ```json (provável tool call em texto). Sem isso
+        # o usuário vê a JSON crua piscar na tela antes do parser final
+        # extrair e remover.
+        suppress_visual = False
 
         for chunk in self.client.chat_stream(
             self.history, tools=self._tool_schemas()
@@ -217,7 +222,14 @@ class Agent:
             content_delta = delta.get("content")
             if content_delta:
                 content += content_delta
-                on_event(AgentEvent("text_delta", {"delta": content_delta}))
+                # Detecta tool call mascarada como JSON pra NÃO mostrar ela
+                # piscando no chat. Heurística: ```json + {"name" OU "function"
+                # OU "tool" — bem específico pra não pegar code blocks reais.
+                if not suppress_visual and _looks_like_inline_tool_call(content):
+                    suppress_visual = True
+                    on_event(AgentEvent("text_suppress_start", {}))
+                if not suppress_visual:
+                    on_event(AgentEvent("text_delta", {"delta": content_delta}))
 
             # Tool calls parciais (formato OpenAI streaming)
             for tc_delta in delta.get("tool_calls") or []:
@@ -320,6 +332,24 @@ def _looks_like_tool_call_attempt(text: str) -> bool:
     if "{" not in text:
         return False
     return bool(_TOOL_CALL_SMELL_RE.search(text))
+
+
+# Heurística mais específica pra streaming: detecta SE estamos no meio de
+# uma tool call mascarada como ```json. Usado pra suprimir text_delta visual.
+_INLINE_TC_RE = re.compile(
+    r"```(?:json|tool_call)?\s*\{[^}]{0,200}?[\"'](?:name|function_name|tool|nome)[\"']",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _looks_like_inline_tool_call(text: str) -> bool:
+    """True se ``text`` (parcial, mid-stream) parece estar dentro de um
+    bloco ```json com uma tool call. Conservador: requer abertura de fence
+    + ``"name"``/equivalente já visível.
+    """
+    if "```" not in text:
+        return False
+    return bool(_INLINE_TC_RE.search(text))
 
 
 # ----------------------------------------------------------------------
