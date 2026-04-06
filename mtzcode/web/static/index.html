@@ -1340,12 +1340,13 @@
     try {
       await api(`/api/sessions/${encodeURIComponent(id)}/resume`, { method: 'POST' });
       state.currentSession = id;
-      // tenta carregar histórico
+      // Carrega o histórico reconstruído (server retorna {history:[...]})
       try {
         const hist = await api('/api/history');
-        renderHistory(hist.messages || hist || []);
+        const msgs = Array.isArray(hist) ? hist : (hist.history || hist.messages || []);
+        renderHistory(msgs);
       } catch (e) {
-        // sem histórico — apenas reseta visual
+        console.warn('history failed', e);
       }
       renderSessions();
       toast('conversa carregada', 'success');
@@ -1357,13 +1358,20 @@
   function renderHistory(messages) {
     const chat = $('chat');
     chat.innerHTML = '';
-    if (!messages.length) {
-      chat.appendChild($('empty') || document.createElement('div'));
+    if (!Array.isArray(messages) || !messages.length) {
+      const empty = document.createElement('div');
+      empty.id = 'empty';
+      empty.className = 'empty';
+      empty.innerHTML = '<h1>mtzCode</h1><p>(conversa vazia)</p>';
+      chat.appendChild(empty);
       return;
     }
     messages.forEach(m => {
       const role = m.role || 'assistant';
+      // pula mensagens "tool" (resultados de tool calls) — UI mostra só user/assistant
+      if (role !== 'user' && role !== 'assistant') return;
       const text = m.content || m.text || '';
+      if (!text && !(m.tool_calls && m.tool_calls.length)) return;
       const { body } = addMessage(role);
       if (role === 'user') body.textContent = text;
       else renderMarkdown(body, text);
@@ -2139,6 +2147,9 @@
       <label>Pasta de dados</label>
       <input id="st-data" type="text" value="${escapeHtml(settings.data_folder || '')}" />
 
+      <label>Python pra treinamento (mlx-lm) <span style="text-transform:none;font-weight:400;opacity:.6;">— vazio = auto-detect</span></label>
+      <input id="st-trainpy" type="text" placeholder="ex: /Users/voce/radioconda/bin/python" value="${escapeHtml(settings.training_python || '')}" />
+
       <label style="margin-top:18px;">🔑 API Keys (perfis cloud)</label>
       <div style="font-size:11px;color:var(--text-mute);margin-bottom:6px;">
         Cole a chave — fica salva localmente e vira variável de ambiente.
@@ -2189,6 +2200,7 @@
     m.querySelector('#st-save').addEventListener('click', async () => {
       const payload = {
         data_folder: m.querySelector('#st-data').value.trim(),
+        training_python: m.querySelector('#st-trainpy').value.trim(),
         api_keys: {
           GROQ_API_KEY: m.querySelector('#st-groq').value,
           MARITACA_API_KEY: m.querySelector('#st-maritaca').value,

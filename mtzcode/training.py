@@ -40,6 +40,80 @@ def _ensure_dirs() -> None:
 
 
 # ----------------------------------------------------------------------
+# Python interpreter discovery — mlx-lm pode estar em outro env
+# ----------------------------------------------------------------------
+def _candidate_pythons() -> list[str]:
+    """Lista de interpretadores Python a testar (sem duplicatas).
+
+    Ordem: override do usuário → sys.executable → conda envs comuns →
+    pythons no PATH. O primeiro que tiver mlx_lm instalado vence.
+    """
+    home = Path.home()
+    cands: list[str] = []
+
+    # 1) Override explícito (env var ou settings)
+    override = os.environ.get("MTZCODE_TRAINING_PYTHON")
+    if override:
+        cands.append(override)
+    try:
+        from mtzcode.settings import get_settings
+        opt = (get_settings().training_python or "").strip()
+        if opt:
+            cands.append(opt)
+    except Exception:
+        pass
+
+    # 2) Interpretador atual
+    cands.append(sys.executable)
+
+    # 3) Envs conda/venv comuns no Mac do Jean
+    for rel in (
+        "radioconda/bin/python",
+        "miniconda3/bin/python",
+        "anaconda3/bin/python",
+        "miniforge3/bin/python",
+        ".venv/bin/python",
+    ):
+        cands.append(str(home / rel))
+
+    # 4) PATH
+    for name in ("python3", "python"):
+        found = shutil.which(name)
+        if found:
+            cands.append(found)
+
+    # Dedupe preservando ordem
+    seen: set[str] = set()
+    out: list[str] = []
+    for c in cands:
+        if c and c not in seen and Path(c).exists():
+            seen.add(c)
+            out.append(c)
+    return out
+
+
+def _python_has_mlx(python_path: str) -> bool:
+    """Testa se um interpretador específico tem mlx_lm importável."""
+    try:
+        r = subprocess.run(
+            [python_path, "-c", "import mlx_lm"],
+            capture_output=True,
+            timeout=10,
+        )
+        return r.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def find_mlx_python() -> str | None:
+    """Retorna o primeiro Python encontrado que tem mlx_lm instalado."""
+    for py in _candidate_pythons():
+        if _python_has_mlx(py):
+            return py
+    return None
+
+
+# ----------------------------------------------------------------------
 # Datasets — upload, list, delete
 # ----------------------------------------------------------------------
 def list_datasets() -> list[dict[str, Any]]:
@@ -178,12 +252,21 @@ def get_job() -> TrainingJob:
 
 
 def check_mlx_lm() -> dict[str, Any]:
-    """Retorna info se mlx-lm está instalado."""
-    try:
-        import mlx_lm  # type: ignore  # noqa: F401
-        return {"installed": True}
-    except ImportError as exc:
-        return {"installed": False, "error": str(exc)}
+    """Retorna info se mlx-lm está disponível em ALGUM Python acessível.
+
+    Não exige que esteja no mesmo venv do servidor — testa vários
+    interpretadores (sys.executable, conda envs, PATH) e usa o primeiro
+    que conseguir importar ``mlx_lm``.
+    """
+    py = find_mlx_python()
+    if py:
+        return {"installed": True, "python": py}
+    tried = _candidate_pythons()
+    return {
+        "installed": False,
+        "error": "mlx_lm não encontrado em nenhum interpretador",
+        "tried": tried,
+    }
 
 
 def start_training(
@@ -199,12 +282,16 @@ def start_training(
         if _job.is_running():
             raise RuntimeError("já existe um treinamento em execução")
 
-        # Pré-checks
+        # Pré-checks — usa o python que tem mlx_lm
         mlx = check_mlx_lm()
         if not mlx.get("installed"):
             raise RuntimeError(
-                "mlx-lm não está instalado. Rode: pip install mlx-lm"
+                "mlx-lm não encontrado em nenhum Python acessível. "
+                "Rode `pip install mlx-lm` no env de sua preferência ou "
+                "configure MTZCODE_TRAINING_PYTHON / Configurações > "
+                "training_python."
             )
+        python_exe = mlx.get("python") or sys.executable
         # O usuário pode subir train.jsonl/valid.jsonl direto em RAW; copia
         # pra FORMATTED se ainda não existir lá. Isso atende o caso "subi
         # meu próprio dataset já formatado".
@@ -231,7 +318,7 @@ def start_training(
         log_path = LOGS_DIR / f"train-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{job_id}.log"
 
         cmd = [
-            sys.executable,
+            python_exe,
             "-m",
             "mlx_lm.lora",
             "--model", model,

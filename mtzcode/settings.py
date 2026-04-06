@@ -41,6 +41,8 @@ class Settings:
     personal_context: str = ""
     # Pasta padrão pra dados (knowledge base, datasets de fine-tune)
     data_folder: str = str(Path.home() / ".mtzcode" / "data")
+    # Interpretador Python pra rodar mlx_lm.lora (override). Vazio = auto-detect.
+    training_python: str = ""
 
     # ------------------------------------------------------------------
     # Carregamento / persistência
@@ -68,6 +70,7 @@ class Settings:
             data_folder=str(
                 data.get("data_folder") or (Path.home() / ".mtzcode" / "data")
             ),
+            training_python=str(data.get("training_python") or ""),
         )
 
     def save(self) -> None:
@@ -118,6 +121,8 @@ class Settings:
             self.personal_context = str(data["personal_context"] or "")
         if "data_folder" in data:
             self.data_folder = str(data["data_folder"] or self.data_folder)
+        if "training_python" in data:
+            self.training_python = str(data["training_python"] or "")
 
 
 # ----------------------------------------------------------------------
