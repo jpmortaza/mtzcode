@@ -973,7 +973,7 @@
       </div>
       <div class="input-row">
         <textarea id="input" rows="2" placeholder="Pergunte ou peça algo para o mtzcode..."></textarea>
-        <button class="btn" id="mic-btn" title="Ditar por voz (clique e fale)">🎤</button>
+        <button class="btn" id="mic-btn" title="Ditar por voz (⌘/Ctrl + Shift + M)">🎤</button>
         <button class="btn primary" id="send-btn">Enviar ↵</button>
       </div>
       <div class="footer-hint">
@@ -2687,6 +2687,14 @@
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         sendMessage();
+      }
+    });
+
+    // atalho global: ⌘/Ctrl + Shift + M ativa/desativa voz
+    document.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'm' || e.key === 'M')) {
+        e.preventDefault();
+        toggleVoice();
       }
     });
   }
