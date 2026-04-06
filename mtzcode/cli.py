@@ -465,6 +465,32 @@ def profiles() -> None:
 
 
 @app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host do servidor."),
+    port: int = typer.Option(8765, "--port", "-P", help="Porta do servidor."),
+) -> None:
+    """Inicia a interface web do mtzcode no navegador."""
+    try:
+        from mtzcode.web.server import run as run_server
+    except ImportError as exc:
+        console.print(
+            f"[red]dependências da UI web não instaladas:[/] {exc}\n"
+            "rode: [cyan]uv pip install -e .[/]"
+        )
+        raise typer.Exit(1) from exc
+    url = f"http://{host}:{port}"
+    console.print(
+        Panel.fit(
+            f"[bold cyan]mtzCode Web UI[/]\n\n"
+            f"abra no navegador: [bold]{url}[/]\n"
+            f"[dim]Ctrl+C para parar[/]",
+            border_style="cyan",
+        )
+    )
+    run_server(host=host, port=port)
+
+
+@app.command()
 def version() -> None:
     """Mostra a versão."""
     console.print(f"mtzcode {__version__}")

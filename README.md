@@ -21,10 +21,16 @@ Tem um sistema de **profiles** que permite trocar entre modelos locais e (opcion
 
 ### Capacidades
 
-- ✅ REPL interativo no terminal com UI bonita (Rich)
+- ✅ **Duas interfaces:** CLI no terminal OU **web UI** no navegador (estilo app do Claude)
 - ✅ **Agent loop** com tool calling iterativo (estilo Claude Code)
 - ✅ **6 tools nativas:** `read`, `write`, `edit`, `bash`, `glob`, `grep`
-- ✅ **Múltiplos perfis de modelo** com troca quente via `/modelo`
+- ✅ **Streaming de tokens** em tempo real (CLI e web)
+- ✅ **Diffs coloridos** quando o `edit` rodar
+- ✅ **Múltiplos perfis de modelo** com troca quente
+- ✅ **Confirmação destrutiva** antes de write/edit/bash (CLI)
+- ✅ **Modo plano** (`/plano`) pra pesquisar sem executar
+- ✅ **Slash commands customizados** (`~/.mtzcode/commands/*.md`)
+- ✅ **RAG foundation** — indexação vetorial local com `nomic-embed-text`
 - ✅ Funciona offline com modelos open-source quantizados
 - ✅ Fallback de parsing de tool calls (compatível com modelos Q4 que não usam tags estruturadas)
 - ✅ Validação de argumentos via Pydantic
@@ -103,6 +109,35 @@ mtzcode
 
 ## Uso
 
+### 🌐 Interface web (recomendado)
+
+Inicia o servidor local e abre no navegador:
+
+```bash
+mtzcode serve
+```
+
+Vai subir em `http://localhost:8765`. A UI tem:
+
+- **Seletor de pasta** no topo — cole o caminho absoluto do projeto onde o agent vai trabalhar
+- **Troca de modelo** com indicador local/cloud
+- **Chat com streaming** — tokens aparecem em tempo real
+- **Tool calls clicáveis** — expanda pra ver o resultado de cada chamada
+- **Markdown + syntax highlight** nas respostas
+- **Botão `/ limpar`** pra zerar o histórico
+
+Flags opcionais:
+```bash
+mtzcode serve --host 0.0.0.0 --port 9000
+```
+
+### 💻 Interface CLI (terminal)
+
+```bash
+mtzcode                 # abre o REPL
+mtzcode chat -p qwen-7b # com profile específico
+```
+
 ### Comandos do REPL
 
 | Comando | Ação |
@@ -110,8 +145,37 @@ mtzcode
 | `/sair` | Encerra a sessão |
 | `/limpar` | Zera o histórico da conversa |
 | `/modelo` | Abre menu pra trocar de perfil de modelo (troca quente, mantém histórico) |
-| `/ajuda` | Mostra ajuda e tools disponíveis |
+| `/plano` | Ativa modo de planejamento — bloqueia tools destrutivas, entrega plano estruturado |
+| `/executar` | Sai do modo plano, libera tools destrutivas |
+| `/ajuda` | Mostra ajuda, slash commands customizados e tools disponíveis |
 | `Ctrl+C` ou `Ctrl+D` | Encerra |
+
+### Subcomandos da CLI
+
+```bash
+mtzcode                       # abre o REPL
+mtzcode chat -p qwen-7b       # REPL com profile específico
+mtzcode serve                 # web UI em http://localhost:8765
+mtzcode serve --port 9000     # porta customizada
+mtzcode profiles              # lista perfis
+mtzcode version               # versão
+```
+
+### Slash commands customizados
+
+Crie arquivos `.md` em `~/.mtzcode/commands/`. Cada arquivo vira um comando. Use `$ARGUMENTS` pra injetar o que o usuário digitar depois do comando.
+
+Exemplo — `~/.mtzcode/commands/review.md`:
+
+```markdown
+Faça uma revisão crítica do código em $ARGUMENTS. Aponte bugs potenciais,
+problemas de segurança, e sugestões de melhoria. Seja direto e conciso.
+```
+
+Uso no REPL:
+```
+você › /review mtzcode/agent.py
+```
 
 ### Subcomandos da CLI
 
@@ -230,10 +294,13 @@ mtzcode/
 - [x] **Fase 2** — Tools básicas (read, write, edit, bash, glob, grep)
 - [x] **Fase 3** — Agent loop com tool calling
 - [x] **Profiles** — Múltiplos modelos com `/modelo`
-- [ ] **Fase 4** — Streaming de tokens, diffs coloridos, confirmação destrutiva
-- [ ] **Fase 5** — Slash commands customizados, plan mode, MCP client
-- [ ] **Fase 6** — RAG sobre o projeto (embeddings locais + sqlite-vec)
+- [x] **Fase 4** — Streaming de tokens, diffs coloridos, confirmação destrutiva
+- [x] **Fase 5 (parcial)** — Slash commands customizados, plan mode (MCP client pendente)
+- [x] **Fase 6** — Fundação de RAG (embeddings + SQLite vetorial). Integração como tool pendente.
+- [x] **Web UI** — FastAPI + HTML single-page estilo app do Claude
 - [ ] **Fase 7** — LoRA fine-tuning sobre logs de uso (especialização)
+- [ ] **RAG tool** — integrar `search_code` no agent + comando `/indexar`
+- [ ] **MCP client** — conectar a servidores Model Context Protocol
 
 ---
 
