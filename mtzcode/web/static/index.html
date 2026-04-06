@@ -924,6 +924,7 @@
       <span id="auto-badge" class="badge auto" style="display:none;">AUTO</span>
       <div class="spacer"></div>
       <button class="icon-btn" id="auto-toggle" title="Modo autônomo">⚡ auto</button>
+      <button class="icon-btn" id="train-btn" title="Modo treinamento (fine-tuning LoRA)">🎓 treinar</button>
       <button class="icon-btn" id="settings-btn" title="Configurações (API keys, modelo, contexto)">⚙ config</button>
       <button class="icon-btn" id="help-btn" title="Ajuda">? ajuda</button>
       <button class="icon-btn" id="export-btn" title="Exportar conversa">↓ export</button>
@@ -1810,6 +1811,312 @@
   }
 
   // ============================================================
+  // Training modal — fine-tuning LoRA
+  // ============================================================
+  let trainingPollTimer = null;
+
+  async function openTrainingModal() {
+    let st;
+    try {
+      st = await api('/api/training/status');
+    } catch (e) {
+      toast('falha carregando training: ' + e.message, 'error');
+      return;
+    }
+    const m = openModal(`
+      <h2>🎓 Modo Treinamento — Fine-tuning LoRA <button class="close">×</button></h2>
+
+      <div id="tr-mlx-warn" style="display:none;background:rgba(228,199,110,.1);border:1px solid var(--yellow);border-radius:6px;padding:10px 12px;margin-bottom:14px;font-size:12.5px;">
+        ⚠ <strong>mlx-lm não está instalado.</strong> Rode no terminal:
+        <code style="display:block;margin-top:6px;background:var(--bg);padding:6px 8px;border-radius:4px;">pip install mlx-lm</code>
+      </div>
+
+      <div style="font-size:12px;color:var(--text-mute);margin-bottom:14px;line-height:1.6;">
+        Treina um <strong>adapter LoRA</strong> em cima do modelo base. Roda 100% local
+        no seu Mac via Apple Silicon (Neural Engine). O resultado vira um perfil novo
+        que você seleciona no topo da UI. Veja <strong>Ajuda → Como treinar em português</strong>
+        pra entender o pipeline completo.
+      </div>
+
+      <div class="modal-tabs">
+        <button class="modal-tab active" data-mtab="datasets">📂 Datasets</button>
+        <button class="modal-tab" data-mtab="train">▶ Treinar</button>
+        <button class="modal-tab" data-mtab="adapters">🧩 Adapters</button>
+        <button class="modal-tab" data-mtab="logs">📜 Logs</button>
+      </div>
+
+      <!-- DATASETS -->
+      <div class="modal-pane active" id="mp-datasets">
+        <div style="font-size:12px;color:var(--text-mute);margin-bottom:8px;">
+          Suba arquivos <code>.jsonl</code> com seus exemplos. Formato esperado:
+          <code>{"conversations":[{"from":"human","value":"..."},{"from":"gpt","value":"..."}]}</code>
+          ou <code>{"prompt":"...","completion":"..."}</code>.
+          Salvos em <code id="tr-raw-dir"></code>.
+        </div>
+        <div id="tr-drop" style="border:2px dashed var(--border-2);border-radius:8px;padding:24px;text-align:center;cursor:pointer;background:var(--bg-elev-2);transition:all .15s;">
+          <div style="font-size:24px;margin-bottom:6px;">📎</div>
+          <div style="font-size:13px;color:var(--text);">Arraste arquivos aqui ou clique para selecionar</div>
+          <div style="font-size:11px;color:var(--text-mute);margin-top:4px;">.jsonl, .json, .txt, .md (até 200MB)</div>
+          <input type="file" id="tr-file-input" multiple accept=".jsonl,.json,.txt,.md" style="display:none;" />
+        </div>
+        <div id="tr-datasets-list" style="margin-top:14px;"></div>
+      </div>
+
+      <!-- TRAIN -->
+      <div class="modal-pane" id="mp-train">
+        <label>Modelo base (Hugging Face)</label>
+        <select id="tr-model">
+          <option value="Qwen/Qwen2.5-14B-Instruct">Qwen 2.5 14B Instruct (recomendado)</option>
+          <option value="Qwen/Qwen2.5-7B-Instruct">Qwen 2.5 7B Instruct (rápido)</option>
+          <option value="Qwen/Qwen2.5-Coder-14B-Instruct">Qwen 2.5 Coder 14B (código)</option>
+          <option value="meta-llama/Llama-3.2-3B-Instruct">Llama 3.2 3B (leve)</option>
+        </select>
+        <div class="row">
+          <div>
+            <label style="text-transform:none;font-size:12px;">Iterações</label>
+            <input id="tr-iters" type="number" value="500" min="10" step="10" />
+          </div>
+          <div>
+            <label style="text-transform:none;font-size:12px;">Batch size</label>
+            <input id="tr-batch" type="number" value="2" min="1" max="16" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label style="text-transform:none;font-size:12px;">LoRA layers</label>
+            <input id="tr-layers" type="number" value="16" min="1" max="64" />
+          </div>
+          <div>
+            <label style="text-transform:none;font-size:12px;">Learning rate</label>
+            <input id="tr-lr" type="number" value="0.00001" step="0.000001" />
+          </div>
+        </div>
+        <div style="font-size:11px;color:var(--text-mute);margin-top:10px;line-height:1.5;">
+          ⏱ Estimativa: ~30min com 500 iters em M3/M4. Ajuste pra cima se o loss ainda estiver caindo.
+          O processo roda em background — você pode fechar a modal e voltar depois.
+        </div>
+        <div id="tr-job-status" style="margin-top:14px;padding:10px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-elev-2);font-size:12px;font-family:var(--mono);"></div>
+        <div class="actions">
+          <button class="btn danger" id="tr-stop" style="display:none;">⏹ Parar</button>
+          <button class="btn primary" id="tr-start">▶ Iniciar treinamento</button>
+        </div>
+      </div>
+
+      <!-- ADAPTERS -->
+      <div class="modal-pane" id="mp-adapters">
+        <div style="font-size:12px;color:var(--text-mute);margin-bottom:10px;">
+          Adapters LoRA já treinados em <code id="tr-adapter-dir"></code>.
+          Próximo passo após treinar: exportar pro Ollama com
+          <code>python -m mtzcode.finetune.export_ollama</code>.
+        </div>
+        <div id="tr-adapters-list"></div>
+      </div>
+
+      <!-- LOGS -->
+      <div class="modal-pane" id="mp-logs">
+        <div style="font-size:12px;color:var(--text-mute);margin-bottom:8px;">
+          Saída do <code>mlx_lm.lora</code> em tempo real (atualiza a cada 2s).
+        </div>
+        <pre id="tr-logs" style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;font-family:var(--mono);font-size:11px;max-height:340px;overflow:auto;white-space:pre-wrap;color:var(--text-dim);">(sem logs ainda — inicie um treinamento)</pre>
+      </div>
+    `);
+
+    // tab switcher
+    m.querySelectorAll('.modal-tab').forEach(t => {
+      t.addEventListener('click', () => {
+        m.querySelectorAll('.modal-tab').forEach(x => x.classList.remove('active'));
+        m.querySelectorAll('.modal-pane').forEach(x => x.classList.remove('active'));
+        t.classList.add('active');
+        m.querySelector('#mp-' + t.dataset.mtab).classList.add('active');
+        if (t.dataset.mtab === 'logs') refreshLogs();
+        if (t.dataset.mtab === 'adapters') refreshAdapters();
+        if (t.dataset.mtab === 'datasets') refreshDatasets();
+      });
+    });
+
+    function applyStatus(s) {
+      m.querySelector('#tr-mlx-warn').style.display = s.mlx_installed ? 'none' : '';
+      m.querySelector('#tr-raw-dir').textContent = (s.dirs && s.dirs.raw) || '';
+      m.querySelector('#tr-adapter-dir').textContent = (s.dirs && s.dirs.adapters) || '';
+      const jb = m.querySelector('#tr-job-status');
+      if (!s.id) {
+        jb.textContent = 'nenhum job rodado ainda nesta sessão.';
+      } else {
+        jb.innerHTML = `
+          <div><strong>job:</strong> ${escapeHtml(s.id)} — <strong>status:</strong> <span style="color:${statusColor(s.status)}">${escapeHtml(s.status)}</span></div>
+          <div><strong>iniciado:</strong> ${escapeHtml(s.started_at || '—')}</div>
+          ${s.finished_at ? `<div><strong>finalizado:</strong> ${escapeHtml(s.finished_at)}</div>` : ''}
+          ${s.return_code != null ? `<div><strong>exit code:</strong> ${s.return_code}</div>` : ''}
+          ${s.error ? `<div style="color:var(--red);"><strong>erro:</strong> ${escapeHtml(s.error)}</div>` : ''}
+        `;
+      }
+      const running = s.status === 'running';
+      m.querySelector('#tr-start').style.display = running ? 'none' : '';
+      m.querySelector('#tr-stop').style.display = running ? '' : 'none';
+    }
+
+    function statusColor(st) {
+      if (st === 'running') return 'var(--cyan)';
+      if (st === 'done') return 'var(--green)';
+      if (st === 'error') return 'var(--red)';
+      if (st === 'cancelled') return 'var(--yellow)';
+      return 'var(--text-dim)';
+    }
+
+    async function refreshDatasets() {
+      try {
+        const data = await api('/api/training/datasets');
+        const list = m.querySelector('#tr-datasets-list');
+        const items = data.datasets || [];
+        if (!items.length) {
+          list.innerHTML = '<div class="empty-list">nenhum dataset enviado ainda</div>';
+          return;
+        }
+        list.innerHTML = items.map(it => `
+          <div style="display:flex;gap:10px;align-items:center;padding:8px 10px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;background:var(--bg-elev-2);">
+            <div style="flex:1;min-width:0;">
+              <div style="font-weight:600;font-family:var(--mono);font-size:12.5px;">${escapeHtml(it.name)}</div>
+              <div style="font-size:11px;color:var(--text-mute);">
+                ${(it.size/1024).toFixed(1)} KB
+                ${it.lines != null ? '· ' + it.lines + ' linhas' : ''}
+                · ${escapeHtml(it.modified)}
+              </div>
+            </div>
+            <button class="btn small danger" data-del="${escapeHtml(it.name)}">apagar</button>
+          </div>
+        `).join('');
+        list.querySelectorAll('[data-del]').forEach(b => {
+          b.addEventListener('click', async () => {
+            if (!confirm('Apagar ' + b.dataset.del + '?')) return;
+            try {
+              await api('/api/training/datasets/' + encodeURIComponent(b.dataset.del), { method: 'DELETE' });
+              toast('apagado', 'success');
+              refreshDatasets();
+            } catch (e) { toast('falha: ' + e.message, 'error'); }
+          });
+        });
+      } catch (e) {
+        toast('falha carregando datasets: ' + e.message, 'error');
+      }
+    }
+
+    async function refreshAdapters() {
+      try {
+        const data = await api('/api/training/adapters');
+        const list = m.querySelector('#tr-adapters-list');
+        const items = data.adapters || [];
+        if (!items.length) {
+          list.innerHTML = '<div class="empty-list">nenhum adapter treinado ainda</div>';
+          return;
+        }
+        list.innerHTML = items.map(it => `
+          <div style="padding:10px 12px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;background:var(--bg-elev-2);">
+            <div style="font-weight:600;font-family:var(--mono);font-size:12.5px;">🧩 ${escapeHtml(it.name)}</div>
+            <div style="font-size:11px;color:var(--text-mute);margin-top:3px;">${escapeHtml(it.path)}</div>
+            <div style="font-size:11px;color:var(--text-mute);">treinado em ${escapeHtml(it.modified)}</div>
+          </div>
+        `).join('');
+      } catch (e) {
+        toast('falha carregando adapters: ' + e.message, 'error');
+      }
+    }
+
+    async function refreshLogs() {
+      try {
+        const data = await api('/api/training/logs?lines=300');
+        const pre = m.querySelector('#tr-logs');
+        pre.textContent = data.log || '(sem logs ainda)';
+        pre.scrollTop = pre.scrollHeight;
+        if (data.job) applyStatus({ ...st, ...data.job });
+      } catch (e) { /* silencioso */ }
+    }
+
+    async function refreshStatus() {
+      try {
+        const s = await api('/api/training/status');
+        Object.assign(st, s);
+        applyStatus(s);
+      } catch (e) { /* silencioso */ }
+    }
+
+    // upload handlers
+    const drop = m.querySelector('#tr-drop');
+    const fileInput = m.querySelector('#tr-file-input');
+    drop.addEventListener('click', () => fileInput.click());
+    drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.style.borderColor = 'var(--accent)'; });
+    drop.addEventListener('dragleave', () => { drop.style.borderColor = ''; });
+    drop.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      drop.style.borderColor = '';
+      await uploadFiles(e.dataTransfer.files);
+    });
+    fileInput.addEventListener('change', () => uploadFiles(fileInput.files));
+
+    async function uploadFiles(files) {
+      for (const f of files) {
+        const fd = new FormData();
+        fd.append('file', f);
+        try {
+          const res = await fetch('/api/training/upload', { method: 'POST', body: fd });
+          if (!res.ok) {
+            const j = await res.json().catch(() => ({}));
+            throw new Error(j.detail || res.status);
+          }
+          toast('enviado: ' + f.name, 'success');
+        } catch (e) {
+          toast('falha enviando ' + f.name + ': ' + e.message, 'error');
+        }
+      }
+      refreshDatasets();
+    }
+
+    // start/stop
+    m.querySelector('#tr-start').addEventListener('click', async () => {
+      const payload = {
+        model: m.querySelector('#tr-model').value,
+        iters: parseInt(m.querySelector('#tr-iters').value) || 500,
+        batch_size: parseInt(m.querySelector('#tr-batch').value) || 2,
+        lora_layers: parseInt(m.querySelector('#tr-layers').value) || 16,
+        learning_rate: parseFloat(m.querySelector('#tr-lr').value) || 1e-5,
+      };
+      try {
+        await api('/api/training/start', { method: 'POST', body: JSON.stringify(payload) });
+        toast('treinamento iniciado', 'success');
+        refreshStatus();
+        // pula pra aba logs
+        m.querySelector('[data-mtab="logs"]').click();
+      } catch (e) {
+        toast('falha: ' + e.message, 'error');
+      }
+    });
+    m.querySelector('#tr-stop').addEventListener('click', async () => {
+      if (!confirm('Parar o treinamento atual? O progresso até agora é mantido.')) return;
+      try {
+        await api('/api/training/stop', { method: 'POST' });
+        toast('treinamento parado', 'warn');
+        refreshStatus();
+      } catch (e) { toast('falha: ' + e.message, 'error'); }
+    });
+
+    // initial load
+    applyStatus(st);
+    refreshDatasets();
+
+    // poll status + logs every 2s while modal is open
+    if (trainingPollTimer) clearInterval(trainingPollTimer);
+    trainingPollTimer = setInterval(() => {
+      if (!document.querySelector('.modal-overlay')) {
+        clearInterval(trainingPollTimer);
+        trainingPollTimer = null;
+        return;
+      }
+      refreshStatus();
+      const logsTab = m.querySelector('#mp-logs');
+      if (logsTab && logsTab.classList.contains('active')) refreshLogs();
+    }, 2000);
+  }
+
+  // ============================================================
   // Settings modal
   // ============================================================
   async function openSettingsModal() {
@@ -2245,6 +2552,7 @@
     $('profile-chip').addEventListener('click', openProfileModal);
     $('cwd-chip').addEventListener('click', openCwdModal);
     $('auto-toggle').addEventListener('click', toggleAuto);
+    $('train-btn').addEventListener('click', openTrainingModal);
     $('settings-btn').addEventListener('click', openSettingsModal);
     $('help-btn').addEventListener('click', openHelpModal);
     $('export-btn').addEventListener('click', exportChat);

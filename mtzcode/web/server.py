@@ -27,7 +27,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -499,6 +499,67 @@ def create_app() -> FastAPI:
                 },
             ]
         }
+
+    # ==================================================================
+    # TRAINING — fine-tuning LoRA via mlx-lm
+    # ==================================================================
+    @app.get("/api/training/status")
+    def training_status() -> dict[str, Any]:
+        from mtzcode import training as _t
+        return _t.status()
+
+    @app.get("/api/training/datasets")
+    def training_datasets() -> dict[str, Any]:
+        from mtzcode import training as _t
+        return {"datasets": _t.list_datasets()}
+
+    @app.post("/api/training/upload")
+    async def training_upload(file: UploadFile = File(...)) -> dict[str, Any]:
+        from mtzcode import training as _t
+        try:
+            content = await file.read()
+            info = _t.save_dataset(file.filename or "unnamed.jsonl", content)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "file": info}
+
+    @app.delete("/api/training/datasets/{filename}")
+    def training_delete_dataset(filename: str) -> dict[str, Any]:
+        from mtzcode import training as _t
+        ok = _t.delete_dataset(filename)
+        if not ok:
+            raise HTTPException(status_code=404, detail="dataset não encontrado")
+        return {"ok": True}
+
+    @app.get("/api/training/adapters")
+    def training_adapters() -> dict[str, Any]:
+        from mtzcode import training as _t
+        return {"adapters": _t.list_adapters()}
+
+    @app.post("/api/training/start")
+    def training_start(req: dict[str, Any] | None = None) -> dict[str, Any]:
+        from mtzcode import training as _t
+        req = req or {}
+        try:
+            return _t.start_training(
+                model=str(req.get("model") or "Qwen/Qwen2.5-14B-Instruct"),
+                iters=int(req.get("iters") or 500),
+                batch_size=int(req.get("batch_size") or 2),
+                lora_layers=int(req.get("lora_layers") or 16),
+                learning_rate=float(req.get("learning_rate") or 1e-5),
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/training/stop")
+    def training_stop() -> dict[str, Any]:
+        from mtzcode import training as _t
+        return _t.stop_training()
+
+    @app.get("/api/training/logs")
+    def training_logs(lines: int = 200) -> dict[str, Any]:
+        from mtzcode import training as _t
+        return {"log": _t.tail_log(max_lines=lines), "job": _t.get_job().to_dict()}
 
     @app.get("/api/browse")
     def browse_endpoint(path: str | None = None) -> dict[str, Any]:
