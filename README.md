@@ -1,7 +1,8 @@
 # mtzcode
 
-> Assistente de código **100% local por padrão**, com agent loop, tool calling,
-> RAG e interface web estilo app do Claude. Sem APIs externas obrigatórias,
+> Assistente de código **100% local por padrão**, com agent loop, tool calling
+> e RAG. Roda tanto no **terminal** (CLI) quanto no **navegador** (web UI estilo
+> app do Claude), usando o mesmo agent por baixo. Sem APIs externas obrigatórias,
 > sem custos por uso, sem código saindo da sua máquina.
 
 ```
