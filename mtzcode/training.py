@@ -433,7 +433,7 @@ def start_training(
             "--train",
             "--data", str(FORMATTED_DIR),
             "--batch-size", str(batch_size),
-            "--lora-layers", str(lora_layers),
+            "--num-layers", str(lora_layers),
             "--iters", str(iters),
             "--learning-rate", str(learning_rate),
             "--adapter-path", str(ADAPTER_DIR),
