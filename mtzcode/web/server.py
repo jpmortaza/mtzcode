@@ -129,27 +129,22 @@ class Session:
 
         # Monkey-patch: substitui registry.schemas() por uma closure que
         # filtra tools desabilitadas. Mantém método original como fallback.
-        # Com SkillRegistry o schema agora é só 2 meta-tools, mas mantemos
-        # o filter por compat (disable das meta-tools desativa o agent).
         self._original_schemas = self.registry.schemas
         self.registry.schemas = self._filtered_schemas  # type: ignore[method-assign]
 
-        # Quando estamos usando SkillRegistry, também precisamos filtrar
-        # no dispatch interno: se a habilidade está desabilitada,
-        # `usar_habilidade` deve recusar ao despachar.
-        inner = getattr(self.registry, "inner", None)
-        if inner is not None and hasattr(inner, "get"):
-            self._original_inner_get = inner.get
+        # Filtro adicional no dispatch: tool desabilitada não executa
+        # nem mesmo se o modelo chamar (o schema já omite, mas garantimos).
+        self._original_get = self.registry.get
 
-            def _filtered_get(name: str):
-                if name in self.disabled_tools:
-                    from mtzcode.tools.base import ToolError as _TE
-                    raise _TE(
-                        f"habilidade `{name}` está desabilitada nesta sessão."
-                    )
-                return self._original_inner_get(name)
+        def _filtered_get(name: str):
+            if name in self.disabled_tools:
+                from mtzcode.tools.base import ToolError as _TE
+                raise _TE(
+                    f"habilidade `{name}` está desabilitada nesta sessão."
+                )
+            return self._original_get(name)
 
-            inner.get = _filtered_get  # type: ignore[method-assign]
+        self.registry.get = _filtered_get  # type: ignore[method-assign]
 
         # Inicia logger de sessão (silenciosamente — falha não quebra o web).
         if _SESSION_LOG_AVAILABLE and SessionLogger is not None:
@@ -159,9 +154,12 @@ class Session:
                 self.session_logger = None
 
     # ----- skills / tools desabilitadas ------------------------------------
-    def _filtered_schemas(self) -> list[dict[str, Any]]:
+    def _filtered_schemas(self, slim: bool = False) -> list[dict[str, Any]]:
         """Retorna schemas omitindo tools listadas em ``disabled_tools``."""
-        all_schemas = self._original_schemas()
+        try:
+            all_schemas = self._original_schemas(slim=slim)  # type: ignore[call-arg]
+        except TypeError:
+            all_schemas = self._original_schemas()
         if not self.disabled_tools:
             return all_schemas
         return [
@@ -203,10 +201,6 @@ class Session:
         else:
             cb = None
         self.agent.confirm_cb = cb
-        # Propaga pro SkillRegistry (se for o caso) — assim habilidades
-        # destrutivas chamadas via `usar_habilidade` respeitam o auto mode.
-        if hasattr(self.registry, "set_confirm_cb"):
-            self.registry.set_confirm_cb(cb)
 
     # ----- session logger --------------------------------------------------
     def rotate_session_logger(self) -> None:
@@ -354,6 +348,38 @@ def create_app() -> FastAPI:
     def reset_endpoint() -> dict[str, Any]:
         session.reset()
         return {"ok": True}
+
+    @app.get("/api/browse")
+    def browse_endpoint(path: str | None = None) -> dict[str, Any]:
+        """Lista subdiretórios de um path. Se vazio, começa em $HOME.
+
+        Usado pelo modal "trocar pasta" da UI pra navegar visualmente em
+        vez de exigir o caminho absoluto digitado.
+        """
+        base = Path(path).expanduser() if path else Path.home()
+        try:
+            base = base.resolve()
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not base.exists() or not base.is_dir():
+            raise HTTPException(status_code=404, detail=f"diretório não encontrado: {base}")
+        entries: list[dict[str, Any]] = []
+        try:
+            for p in sorted(base.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
+                if p.name.startswith("."):
+                    continue
+                if not p.is_dir():
+                    continue
+                entries.append({"name": p.name, "path": str(p)})
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        parent = str(base.parent) if base.parent != base else None
+        return {
+            "path": str(base),
+            "parent": parent,
+            "home": str(Path.home()),
+            "entries": entries,
+        }
 
     @app.post("/api/tree")
     def tree_endpoint() -> dict[str, Any]:
@@ -675,6 +701,35 @@ def create_app() -> FastAPI:
                 # text_delta e demais são ignorados — só usamos eventos finais.
 
         return {"ok": True, "id": session_id, "messages": len(session.agent.history)}
+
+    @app.delete("/api/sessions/{session_id}")
+    def sessions_delete(session_id: str) -> dict[str, Any]:
+        """Apaga o arquivo .jsonl de uma sessão."""
+        path = _session_path_from_id(session_id)
+        if path is None or not path.exists():
+            raise HTTPException(status_code=404, detail="sessão não encontrada")
+        try:
+            path.unlink()
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return {"ok": True, "id": session_id}
+
+    @app.delete("/api/sessions")
+    def sessions_delete_all() -> dict[str, Any]:
+        """Apaga TODAS as sessões salvas. Cuidado."""
+        if not _SESSION_LOG_AVAILABLE or _list_sessions is None:
+            raise HTTPException(status_code=503, detail="session_log indisponível")
+        items = _list_sessions()
+        deleted = 0
+        for s in items:
+            p = Path(s.get("path", ""))
+            if p.exists():
+                try:
+                    p.unlink()
+                    deleted += 1
+                except OSError:
+                    pass
+        return {"ok": True, "deleted": deleted}
 
     @app.post("/api/sessions/new")
     def sessions_new() -> dict[str, Any]:

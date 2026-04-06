@@ -21,6 +21,29 @@ class ToolError(RuntimeError):
     """Erro recuperável ao executar uma tool. A mensagem volta pro modelo."""
 
 
+def _slim_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Remove ruído de um JSONSchema gerado pelo Pydantic.
+
+    Tira ``title`` e ``description`` recursivos e descarta defs vazios.
+    Preserva ``type``, ``properties``, ``required``, ``enum``, ``items``.
+    """
+    if not isinstance(schema, dict):
+        return schema
+    out: dict[str, Any] = {}
+    for k, v in schema.items():
+        if k in ("title", "description", "$defs", "definitions"):
+            continue
+        if k == "properties" and isinstance(v, dict):
+            out[k] = {pk: _slim_schema(pv) for pk, pv in v.items()}
+        elif isinstance(v, dict):
+            out[k] = _slim_schema(v)
+        elif isinstance(v, list):
+            out[k] = [_slim_schema(x) if isinstance(x, dict) else x for x in v]
+        else:
+            out[k] = v
+    return out
+
+
 class Tool(ABC):
     name: ClassVar[str]
     description: ClassVar[str]
@@ -28,14 +51,27 @@ class Tool(ABC):
     # Tools destrutivas disparam prompt de confirmação antes de executar.
     destructive: ClassVar[bool] = False
 
-    def schema(self) -> dict[str, Any]:
-        """Schema OpenAI/Ollama-style para tool calling."""
+    def schema(self, slim: bool = False) -> dict[str, Any]:
+        """Schema OpenAI/Ollama-style para tool calling.
+
+        Em ``slim=True`` a descrição vira só a primeira linha (até 100 chars)
+        e os campos do Args perdem ``title``/``description`` longas.
+        Reduz drasticamente o overhead de tokens em modelos locais.
+        """
+        if slim:
+            desc = (self.description or "").strip().split("\n")[0]
+            if len(desc) > 100:
+                desc = desc[:97] + "..."
+            params = _slim_schema(self.Args.model_json_schema())
+        else:
+            desc = self.description
+            params = self.Args.model_json_schema()
         return {
             "type": "function",
             "function": {
                 "name": self.name,
-                "description": self.description,
-                "parameters": self.Args.model_json_schema(),
+                "description": desc,
+                "parameters": params,
             },
         }
 
@@ -76,8 +112,8 @@ class ToolRegistry:
             raise ToolError(f"tool desconhecida: `{name}`")
         return self._tools[name]
 
-    def schemas(self) -> list[dict[str, Any]]:
-        return [t.schema() for t in self._tools.values()]
+    def schemas(self, slim: bool = False) -> list[dict[str, Any]]:
+        return [t.schema(slim=slim) for t in self._tools.values()]
 
     def names(self) -> list[str]:
         return list(self._tools.keys())

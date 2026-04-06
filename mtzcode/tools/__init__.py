@@ -113,27 +113,18 @@ def _build_inner_registry(groups: list[str] | None = None) -> ToolRegistry:
 
 
 def default_registry(groups: list[str] | None = None):
-    """Registry padrão do mtzcode — usa o sistema de habilidades sob demanda.
+    """Registry padrão do mtzcode — todas as habilidades expostas direto.
 
-    Retorna uma `SkillRegistry` que expõe ao modelo apenas 2 meta-tools
-    (`listar_habilidades` e `usar_habilidade`), mas mantém TODAS as
-    habilidades acessíveis via dispatch interno. Isso reduz o contexto
-    base de ~6-8k tokens (24 schemas) pra ~500 tokens (2 schemas),
-    deixando modelos locais 10x mais responsivos.
-
-    Pra obter o registry "cru" antigo (todas as tools no schema), use
-    `_build_inner_registry()` diretamente.
+    A indireção meta-tool (SkillRegistry) confundia modelos locais Q4
+    porque exigia JSON aninhado (`usar_habilidade(nome=X, argumentos={...})`).
+    Voltamos a expor tudo direto, mas com schemas slim (descrições curtas
+    + remoção de ruído do JSONSchema do Pydantic) — reduz ~60% do
+    overhead de contexto sem perder funcionalidade.
     """
     # Por padrão habilita TUDO (env var MTZCODE_TOOL_GROUPS pode restringir)
     if groups is None and not os.environ.get("MTZCODE_TOOL_GROUPS"):
         groups = ["all"]
-
-    inner = _build_inner_registry(groups)
-
-    # Import lazy pra evitar ciclo (habilidades.py importa de tools.base)
-    from mtzcode.habilidades import SkillRegistry
-
-    return SkillRegistry(inner)
+    return _build_inner_registry(groups)
 
 
 __all__ = [

@@ -296,11 +296,6 @@ def _repl(cfg: Config) -> None:
     confirm_cb = _make_confirm_cb(state)
     default_prompt = cfg.system_prompt()
     agent = Agent(client, registry, default_prompt, confirm_cb=confirm_cb)
-    # Propaga confirm_cb pra SkillRegistry (se for o caso) — assim
-    # habilidades destrutivas chamadas via `usar_habilidade` ainda
-    # disparam confirmação no terminal.
-    if hasattr(registry, "set_confirm_cb"):
-        registry.set_confirm_cb(confirm_cb)
     renderer = EventRenderer()
 
     # Carrega slash commands customizados do usuário

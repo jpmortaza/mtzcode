@@ -16,8 +16,27 @@ from mtzcode.tools.base import Tool, ToolError, ToolRegistry
 
 MAX_ITERATIONS = 25
 
+# Quando o modelo emite texto que parece ser uma tool call mas o parser não
+# consegue decodificar, devolvemos esta mensagem como "tool result" sintético
+# pra forçar o modelo a retentar com o formato correto.
+_RECOVERY_HINT = (
+    "ERRO DE FORMATO: você escreveu o que parecia uma tool call em texto, "
+    "mas o JSON estava inválido ou em formato errado. "
+    "NÃO escreva JSON no texto da resposta. "
+    "Use o mecanismo de tool calling do sistema (function calling). "
+    "Retente AGORA chamando a tool corretamente — não desista, não peça desculpa, "
+    "apenas faça a chamada certa."
+)
+
 # Regex para extrair blocos <tool_call>...</tool_call> (template Qwen oficial)
 _TOOL_CALL_TAG_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
+
+# Heurística: detecta texto que CHEIRA a tentativa de tool call (pra disparar
+# auto-recuperação quando o parser falha em extrair).
+_TOOL_CALL_SMELL_RE = re.compile(
+    r'["\']\s*(?:name|function_name|tool|nome)\s*["\']\s*:\s*["\']',
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -73,7 +92,9 @@ class Agent:
 
         for _ in range(self.max_iterations):
             try:
-                msg = self.client.chat(self.history, tools=self.registry.schemas())
+                msg = self.client.chat(
+                    self.history, tools=self._tool_schemas()
+                )
             except ChatClientError:
                 self.history.pop()
                 raise
@@ -89,6 +110,12 @@ class Agent:
             self._append_assistant(content, tool_calls)
 
             if content and not tool_calls:
+                # Auto-recuperação: se o texto cheira a tool call mas o parser
+                # falhou, força o modelo a retentar.
+                if _looks_like_tool_call_attempt(content):
+                    on_event(AgentEvent("tool_error", {"name": "?", "error": "JSON malformado no texto"}))
+                    self.history.append({"role": "user", "content": _RECOVERY_HINT})
+                    continue
                 on_event(AgentEvent("assistant_text", {"text": content}))
                 final_text = content
 
@@ -128,6 +155,19 @@ class Agent:
             self._append_assistant(content, tool_calls)
 
             if content and not tool_calls:
+                # Auto-recuperação: o texto cheira a tool call malformada?
+                # Força o modelo a retentar em vez de devolver lixo pro usuário.
+                if _looks_like_tool_call_attempt(content):
+                    on_event(
+                        AgentEvent(
+                            "tool_error",
+                            {"name": "?", "error": "JSON malformado no texto, retentando..."},
+                        )
+                    )
+                    self.history.append(
+                        {"role": "user", "content": _RECOVERY_HINT}
+                    )
+                    continue
                 final_text = content
 
             if not tool_calls:
@@ -143,6 +183,18 @@ class Agent:
     # ------------------------------------------------------------------
     # Helpers internos
     # ------------------------------------------------------------------
+    def _tool_schemas(self) -> list[dict[str, Any]]:
+        """Retorna schemas em modo slim quando o registry suportar.
+
+        Modelos locais Q4 ficam muito mais responsivos com schemas curtos.
+        Se o registry foi monkey-patched (web UI filtrando disabled tools),
+        respeita a assinatura sem ``slim`` como fallback.
+        """
+        try:
+            return self.registry.schemas(slim=True)  # type: ignore[call-arg]
+        except TypeError:
+            return self.registry.schemas()
+
     def _consume_stream(
         self, on_event: EventCallback
     ) -> tuple[str, list[dict[str, Any]]]:
@@ -154,7 +206,7 @@ class Agent:
         tool_calls_by_idx: dict[int, dict[str, Any]] = {}
 
         for chunk in self.client.chat_stream(
-            self.history, tools=self.registry.schemas()
+            self.history, tools=self._tool_schemas()
         ):
             choices = chunk.get("choices") or []
             if not choices:
@@ -258,6 +310,19 @@ class Agent:
 
 
 # ----------------------------------------------------------------------
+# Heurística de detecção: o texto cheira a tentativa de tool call?
+# ----------------------------------------------------------------------
+def _looks_like_tool_call_attempt(text: str) -> bool:
+    """True se o texto parece ter JSON de tool call (mesmo malformado)."""
+    if not text:
+        return False
+    # Precisa ter ao menos um '{' E uma chave conhecida de tool call
+    if "{" not in text:
+        return False
+    return bool(_TOOL_CALL_SMELL_RE.search(text))
+
+
+# ----------------------------------------------------------------------
 # Fallback parser — para modelos que emitem tool calls como JSON no content
 # ----------------------------------------------------------------------
 def _extract_tool_calls_from_content(content: str) -> tuple[list[dict[str, Any]], str]:
@@ -284,11 +349,25 @@ def _extract_tool_calls_from_content(content: str) -> tuple[list[dict[str, Any]]
         if calls:
             return calls, leftover
 
-    # Remove code fences se presentes
+    # Extrai TODOS os blocos ```json ... ``` do texto (modelos costumam emitir
+    # várias tool calls intercaladas com prosa)
+    fence_re = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+    fence_matches = fence_re.findall(content)
+    if fence_matches:
+        calls: list[dict[str, Any]] = []
+        for raw in fence_matches:
+            parsed = _parse_call_json(raw)
+            if parsed:
+                calls.append(parsed)
+        if calls:
+            leftover = fence_re.sub("", content).strip()
+            return calls, leftover
+
+    # Remove code fences se presentes (caso simples sem texto extra)
     stripped = content.strip()
     if stripped.startswith("```"):
         stripped = re.sub(r"^```(?:json)?\s*", "", stripped)
-        stripped = re.sub(r"\s*```$", "", stripped)
+        stripped = re.sub(r"\s*```\s*$", "", stripped)
 
     # Tenta primeiro parsear o content INTEIRO como JSON único (caminho mais limpo)
     try:
@@ -388,10 +467,31 @@ def _parse_call_json(raw: str) -> dict[str, Any] | None:
 
 
 def _normalize_call_dict(data: dict[str, Any]) -> dict[str, Any] | None:
-    name = data.get("name")
-    if not isinstance(name, str):
+    # Aceita variantes que modelos open-source emitem por engano:
+    # name | function_name | tool | tool_name | nome
+    name = (
+        data.get("name")
+        or data.get("function_name")
+        or data.get("tool")
+        or data.get("tool_name")
+        or data.get("nome")
+    )
+    if not isinstance(name, str) or not name.strip():
         return None
-    arguments = data.get("arguments", {})
+    name = name.strip()
+    # Aceita variantes pra args:
+    # arguments | parameters | args | input | argumentos
+    arguments = (
+        data.get("arguments")
+        if data.get("arguments") is not None
+        else data.get("parameters")
+        if data.get("parameters") is not None
+        else data.get("args")
+        if data.get("args") is not None
+        else data.get("input")
+        if data.get("input") is not None
+        else data.get("argumentos", {})
+    )
     if isinstance(arguments, str):
         try:
             arguments = json.loads(arguments) if arguments.strip() else {}
@@ -399,6 +499,14 @@ def _normalize_call_dict(data: dict[str, Any]) -> dict[str, Any] | None:
             arguments = {}
     if not isinstance(arguments, dict):
         arguments = {}
+    # Desfaz indireção meta-tool antiga: se o modelo ainda tenta chamar
+    # `usar_habilidade(nome=X, argumentos=Y)`, redireciona pra X(Y).
+    if name in ("usar_habilidade", "use_skill") and isinstance(arguments, dict):
+        inner_name = arguments.get("nome") or arguments.get("name")
+        inner_args = arguments.get("argumentos") or arguments.get("arguments") or {}
+        if isinstance(inner_name, str) and inner_name.strip():
+            name = inner_name.strip()
+            arguments = inner_args if isinstance(inner_args, dict) else {}
     return {
         "id": f"call_{name}",
         "type": "function",

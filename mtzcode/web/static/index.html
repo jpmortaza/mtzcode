@@ -1264,16 +1264,36 @@
     state.sessions.forEach(s => {
       const id = s.id || s.session_id;
       const isActive = state.currentSession === id;
-      const title = s.title || s.first_message || s.preview || 'sem título';
+      const title = s.title || s.first_user_message || s.first_message || s.preview || 'sem título';
       const el = document.createElement('div');
       el.className = 'item' + (isActive ? ' active' : '');
+      el.style.display = 'flex';
+      el.style.alignItems = 'center';
+      el.style.gap = '6px';
       el.innerHTML = `
-        <span class="label">
-          ${escapeHtml(title.slice(0, 50))}
-          <span class="sub">${escapeHtml(relativeTime(s.updated_at || s.created_at || s.timestamp))}</span>
+        <span class="label" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;">
+          ${escapeHtml(String(title).slice(0, 50))}
+          <span class="sub">${escapeHtml(relativeTime(s.updated_at || s.created_at || s.ts || s.timestamp))}</span>
         </span>
+        <button class="session-del" title="apagar conversa" style="background:none;border:none;color:#888;cursor:pointer;padding:4px 6px;font-size:14px;border-radius:4px;">✕</button>
       `;
-      el.addEventListener('click', () => resumeSession(id));
+      el.querySelector('.label').addEventListener('click', () => resumeSession(id));
+      const delBtn = el.querySelector('.session-del');
+      delBtn.addEventListener('mouseenter', () => { delBtn.style.background = 'rgba(255,80,80,.15)'; delBtn.style.color = '#f88'; });
+      delBtn.addEventListener('mouseleave', () => { delBtn.style.background = ''; delBtn.style.color = '#888'; });
+      delBtn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        if (!confirm('Apagar esta conversa?')) return;
+        try {
+          await api(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
+          state.sessions = state.sessions.filter(x => (x.id || x.session_id) !== id);
+          if (state.currentSession === id) state.currentSession = null;
+          renderSessions();
+          toast('conversa apagada', 'success');
+        } catch (e) {
+          toast('falha ao apagar: ' + e.message, 'error');
+        }
+      });
       container.appendChild(el);
     });
   }
@@ -1691,24 +1711,54 @@
   }
 
   // ============================================================
-  // CWD modal
+  // CWD modal — folder browser navegável
   // ============================================================
   function openCwdModal() {
     const m = openModal(`
       <h2>Trocar pasta <button class="close">×</button></h2>
-      <label>Caminho absoluto</label>
-      <input id="mc-path" type="text" value="${escapeHtml(state.cwd)}" />
-      <div class="actions">
+      <div id="fb-path" style="font-family:ui-monospace,monospace;font-size:12px;opacity:.75;margin-bottom:8px;word-break:break-all;"></div>
+      <div id="fb-list" style="max-height:340px;overflow:auto;border:1px solid var(--border,#333);border-radius:8px;padding:4px;background:rgba(0,0,0,.2);"></div>
+      <div class="actions" style="margin-top:12px;">
         <button class="btn" id="mc-cancel">Cancelar</button>
-        <button class="btn primary" id="mc-save">Aplicar</button>
+        <button class="btn primary" id="mc-save">Usar esta pasta</button>
       </div>
     `);
+    let currentPath = state.cwd || null;
+
+    async function load(path) {
+      const list = m.querySelector('#fb-list');
+      list.innerHTML = '<div style="padding:12px;opacity:.6;">carregando...</div>';
+      try {
+        const qs = path ? ('?path=' + encodeURIComponent(path)) : '';
+        const data = await api('/api/browse' + qs);
+        currentPath = data.path;
+        m.querySelector('#fb-path').textContent = data.path;
+        const rows = [];
+        if (data.parent) {
+          rows.push(`<div class="fb-row" data-path="${escapeHtml(data.parent)}" style="padding:8px 10px;cursor:pointer;border-radius:6px;display:flex;gap:8px;align-items:center;">⬆️ <span style="opacity:.7;">.. (subir)</span></div>`);
+        }
+        if (data.entries.length === 0) {
+          rows.push('<div style="padding:12px;opacity:.5;">(vazio — nenhuma subpasta)</div>');
+        }
+        for (const e of data.entries) {
+          rows.push(`<div class="fb-row" data-path="${escapeHtml(e.path)}" style="padding:8px 10px;cursor:pointer;border-radius:6px;display:flex;gap:8px;align-items:center;">📁 <span>${escapeHtml(e.name)}</span></div>`);
+        }
+        list.innerHTML = rows.join('');
+        list.querySelectorAll('.fb-row').forEach(row => {
+          row.addEventListener('mouseenter', () => row.style.background = 'rgba(255,255,255,.06)');
+          row.addEventListener('mouseleave', () => row.style.background = '');
+          row.addEventListener('click', () => load(row.dataset.path));
+        });
+      } catch (e) {
+        list.innerHTML = `<div style="padding:12px;color:#f88;">erro: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
     m.querySelector('#mc-cancel').addEventListener('click', closeModal);
     m.querySelector('#mc-save').addEventListener('click', async () => {
-      const path = m.querySelector('#mc-path').value.trim();
-      if (!path) return;
+      if (!currentPath) return;
       try {
-        const data = await api('/api/cwd', { method: 'POST', body: JSON.stringify({ path }) });
+        const data = await api('/api/cwd', { method: 'POST', body: JSON.stringify({ path: currentPath }) });
         state.cwd = data.cwd;
         $('cwd-text').textContent = shortPath(data.cwd);
         $('cwd-text').title = data.cwd;
@@ -1718,7 +1768,8 @@
         toast('pasta inválida: ' + e.message, 'error');
       }
     });
-    setTimeout(() => m.querySelector('#mc-path').focus(), 50);
+
+    load(currentPath);
   }
 
   // ============================================================
