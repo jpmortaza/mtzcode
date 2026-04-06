@@ -248,6 +248,10 @@ mtzcode/
 
 Issues e PRs são bem-vindos. O projeto é minimalista por design — features grandes deveriam ser discutidas em issue antes.
 
+## Licença
+
+[MIT](LICENSE) — faça o que quiser.
+
 ---
 
 **Construído por [Jean Mortaza](https://github.com/jpmortaza).**
