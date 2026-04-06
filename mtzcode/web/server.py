@@ -523,6 +523,36 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "file": info}
 
+    @app.post("/api/chat/attach")
+    async def chat_attach(file: UploadFile = File(...)) -> dict[str, Any]:
+        """Recebe um arquivo do chat e salva em ~/.mtzcode/uploads/.
+
+        O frontend chama isso quando o usuário arrasta/anexa um arquivo no
+        composer. Retorna o caminho absoluto pra que a próxima mensagem
+        possa referenciar (o modelo então usa `read` pra acessar).
+        """
+        uploads_dir = Path.home() / ".mtzcode" / "uploads"
+        uploads_dir.mkdir(parents=True, exist_ok=True)
+        # Sanitiza o nome e prefixa com timestamp pra evitar colisão
+        safe = Path(file.filename or "anexo.bin").name
+        if not safe or safe.startswith("."):
+            safe = "anexo.bin"
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        target = uploads_dir / f"{ts}-{safe}"
+        try:
+            content = await file.read()
+            if len(content) > 50 * 1024 * 1024:
+                raise HTTPException(status_code=400, detail="arquivo grande demais (>50MB)")
+            target.write_bytes(content)
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"falha ao salvar: {exc}") from exc
+        return {
+            "ok": True,
+            "name": safe,
+            "path": str(target),
+            "size": len(content),
+        }
+
     @app.post("/api/training/format")
     def training_format() -> dict[str, Any]:
         from mtzcode import training as _t

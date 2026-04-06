@@ -963,6 +963,13 @@
     </main>
 
     <footer>
+      <div id="attach-bar" style="display:none;padding:6px 12px 0;font-size:11px;color:var(--text-mute);">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+          <span style="text-transform:uppercase;letter-spacing:.5px;opacity:.7;">Anexos</span>
+          <span id="attach-count" style="background:var(--accent);color:#000;border-radius:10px;padding:1px 7px;font-weight:600;">0</span>
+        </div>
+        <div id="attach-list" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+      </div>
       <div id="queue-bar" style="display:none;padding:6px 12px 0;font-size:11px;color:var(--text-mute);">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
           <span style="text-transform:uppercase;letter-spacing:.5px;opacity:.7;">Fila</span>
@@ -972,7 +979,9 @@
         <div id="queue-list" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
       </div>
       <div class="input-row">
-        <textarea id="input" rows="2" placeholder="Pergunte ou peça algo para o mtzcode..."></textarea>
+        <textarea id="input" rows="2" placeholder="Pergunte ou peça algo para o mtzcode... (arraste arquivos pra anexar)"></textarea>
+        <input type="file" id="attach-input" multiple style="display:none;" />
+        <button class="btn" id="attach-btn" title="Anexar arquivo(s) ao chat">📎</button>
         <button class="btn" id="mic-btn" title="Ditar por voz (⌘/Ctrl + Shift + M)">🎤</button>
         <button class="btn primary" id="send-btn">Enviar ↵</button>
       </div>
@@ -1046,6 +1055,7 @@
     cwd: '',
     busy: false,
     queue: [],
+    attachments: [],
   };
 
   // Endpoints "opcionais" — se 404, marcamos como indisponíveis
@@ -2434,6 +2444,67 @@
   // Chat: send / stream
   // ============================================================
   // ============================================================
+  // Anexos — arquivos que viram contexto da próxima mensagem
+  // ============================================================
+  function renderAttachments() {
+    const bar = $('attach-bar');
+    const list = $('attach-list');
+    const count = $('attach-count');
+    if (!state.attachments.length) {
+      bar.style.display = 'none';
+      return;
+    }
+    bar.style.display = '';
+    count.textContent = state.attachments.length;
+    list.innerHTML = '';
+    state.attachments.forEach((a, i) => {
+      const chip = document.createElement('div');
+      chip.style.cssText = 'display:flex;align-items:center;gap:6px;background:var(--bg-elev-2);border:1px solid var(--border);border-radius:14px;padding:4px 8px 4px 10px;max-width:280px;';
+      const icon = document.createElement('span');
+      icon.textContent = '📎';
+      icon.style.cssText = 'font-size:11px;';
+      const txt = document.createElement('span');
+      txt.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--text);';
+      txt.textContent = `${a.name} (${(a.size / 1024).toFixed(1)} KB)`;
+      txt.title = a.path;
+      const x = document.createElement('button');
+      x.textContent = '×';
+      x.style.cssText = 'background:none;border:none;color:var(--text-mute);cursor:pointer;font-size:14px;line-height:1;padding:0 2px;';
+      x.title = 'remover anexo';
+      x.addEventListener('click', () => {
+        state.attachments.splice(i, 1);
+        renderAttachments();
+      });
+      chip.appendChild(icon);
+      chip.appendChild(txt);
+      chip.appendChild(x);
+      list.appendChild(chip);
+    });
+  }
+
+  async function uploadAttachment(file) {
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      const res = await fetch('/api/chat/attach', { method: 'POST', body: fd });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.detail || res.status);
+      }
+      const data = await res.json();
+      state.attachments.push({ name: data.name, path: data.path, size: data.size });
+      renderAttachments();
+      toast(`anexado: ${data.name}`, 'success');
+    } catch (e) {
+      toast('falha anexando ' + file.name + ': ' + e.message, 'error');
+    }
+  }
+
+  async function uploadAttachments(files) {
+    for (const f of files) await uploadAttachment(f);
+  }
+
+  // ============================================================
   // Fila de execução — enfileira mensagens enquanto uma roda
   // ============================================================
   function renderQueue() {
@@ -2476,19 +2547,39 @@
 
   async function sendMessage() {
     const input = $('input');
-    const message = input.value.trim();
-    if (!message) return;
+    const rawText = input.value.trim();
+    if (!rawText && !state.attachments.length) return;
+    // Monta mensagem final com prefixo de anexos (se houver)
+    let message = rawText;
+    if (state.attachments.length) {
+      const lines = state.attachments.map(a => `- ${a.path}`).join('\n');
+      const header = state.attachments.length === 1
+        ? `[Anexo do usuário — use a tool read pra acessar:]\n${lines}\n\n`
+        : `[Anexos do usuário (${state.attachments.length}) — use a tool read pra acessar cada um:]\n${lines}\n\n`;
+      message = header + (rawText || '(sem texto — analise o(s) anexo(s))');
+    }
     // Se já tem algo rodando, enfileira em vez de bloquear
     if (state.busy) {
       input.value = '';
       enqueueMessage(message);
+      state.attachments = [];
+      renderAttachments();
       return;
     }
     state.busy = true;
     $('send-btn').disabled = true;
     input.value = '';
+    const sentAttachments = state.attachments.slice();
+    state.attachments = [];
+    renderAttachments();
 
-    addMessage('user').body.textContent = message;
+    const userMsg = addMessage('user');
+    if (sentAttachments.length) {
+      const chips = sentAttachments.map(a => `<span style="display:inline-block;background:var(--bg-elev-2);border:1px solid var(--border);border-radius:10px;padding:1px 8px;margin:2px 4px 2px 0;font-size:11px;">📎 ${escapeHtml(a.name)}</span>`).join('');
+      userMsg.body.innerHTML = chips + (rawText ? '<br>' + escapeHtml(rawText) : '');
+    } else {
+      userMsg.body.textContent = rawText;
+    }
     const assistant = addMessage('assistant');
     let streamedText = '';
     let currentTool = null;
@@ -2672,6 +2763,42 @@
         $('input').value = card.dataset.prompt;
         $('input').focus();
       });
+    });
+
+    // anexos — botão + input file
+    $('attach-btn').addEventListener('click', () => $('attach-input').click());
+    $('attach-input').addEventListener('change', (e) => {
+      if (e.target.files && e.target.files.length) uploadAttachments(e.target.files);
+      e.target.value = '';
+    });
+    // drag & drop em qualquer lugar do app
+    const appEl = document.body;
+    let dragCounter = 0;
+    appEl.addEventListener('dragenter', (e) => {
+      if (!e.dataTransfer || !e.dataTransfer.types.includes('Files')) return;
+      e.preventDefault();
+      dragCounter++;
+      document.body.style.outline = '3px dashed var(--accent)';
+      document.body.style.outlineOffset = '-6px';
+    });
+    appEl.addEventListener('dragover', (e) => {
+      if (e.dataTransfer && e.dataTransfer.types.includes('Files')) e.preventDefault();
+    });
+    appEl.addEventListener('dragleave', () => {
+      dragCounter--;
+      if (dragCounter <= 0) {
+        dragCounter = 0;
+        document.body.style.outline = '';
+        document.body.style.outlineOffset = '';
+      }
+    });
+    appEl.addEventListener('drop', (e) => {
+      if (!e.dataTransfer || !e.dataTransfer.files.length) return;
+      e.preventDefault();
+      dragCounter = 0;
+      document.body.style.outline = '';
+      document.body.style.outlineOffset = '';
+      uploadAttachments(e.dataTransfer.files);
     });
 
     // fila
