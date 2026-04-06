@@ -28,6 +28,13 @@ from mtzcode.tools.docx import DocxReadTool, DocxWriteTool
 from mtzcode.tools.edit import EditTool
 from mtzcode.tools.find_files import FindFilesTool
 from mtzcode.tools.find_images import FindImagesTool
+from mtzcode.tools.github import (
+    GhAnalyzeRepoTool,
+    GhCloneTool,
+    GhListReposTool,
+    GhPushFolderTool,
+    GhRepoInfoTool,
+)
 from mtzcode.tools.glob import GlobTool
 from mtzcode.tools.grep import GrepTool
 from mtzcode.tools.notify import NotifyTool
@@ -64,6 +71,14 @@ TOOL_GROUPS: dict[str, list[type[Tool]]] = {
     "web": [WebSearchTool, BrowserTool],
     # APIFY: scraping/automação via plataforma Apify (precisa APIFY_API_KEY)
     "apify": [ApifyRunActorTool, ApifyListActorsTool, ApifyGetDatasetTool],
+    # GITHUB: clone/info/push de repos via gh CLI (precisa `gh auth login`)
+    "github": [
+        GhCloneTool,
+        GhRepoInfoTool,
+        GhListReposTool,
+        GhPushFolderTool,
+        GhAnalyzeRepoTool,
+    ],
     # MACOS: controle do sistema (apps, notificações, clipboard, screenshot)
     "macos": [
         AppleScriptTool,
@@ -177,4 +192,9 @@ __all__ = [
     "ApifyRunActorTool",
     "ApifyListActorsTool",
     "ApifyGetDatasetTool",
+    "GhCloneTool",
+    "GhRepoInfoTool",
+    "GhListReposTool",
+    "GhPushFolderTool",
+    "GhAnalyzeRepoTool",
 ]
