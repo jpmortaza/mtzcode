@@ -12,12 +12,17 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.text import Text
 
+from pathlib import Path
+
 from mtzcode import __version__
 from mtzcode.agent import Agent, AgentEvent
 from mtzcode.client import ChatClient, ChatClientError
+from mtzcode.commands import SlashCommand, commands_dir, load_commands, parse_slash
 from mtzcode.config import Config
 from mtzcode.profiles import PROFILES, Profile, get_profile, list_profiles
 from mtzcode.tools import default_registry
+
+_PLAN_MODE_PROMPT_PATH = Path(__file__).parent / "prompts" / "plan_mode.md"
 
 app = typer.Typer(
     add_completion=False,
@@ -64,15 +69,26 @@ class SessionState:
     def __init__(self) -> None:
         # Tools marcadas como "sempre permitir" nesta sessão
         self.always_allow: set[str] = set()
+        # Plan mode: se True, bloqueia tools destrutivas independente do always_allow
+        self.plan_mode: bool = False
 
     def should_confirm(self, tool_name: str) -> bool:
+        if self.plan_mode:
+            return True  # sempre confirma em plan mode (será recusado automaticamente)
         return tool_name not in self.always_allow
 
 
 def _make_confirm_cb(state: SessionState):
-    """Retorna um confirm_cb que pergunta [s/N/sempre] e respeita 'sempre'."""
+    """Retorna um confirm_cb que pergunta [s/N/sempre] e respeita 'sempre'.
+    Em plan_mode, recusa automaticamente tools destrutivas."""
 
     def confirm(tool_name: str, args: dict) -> bool:
+        if state.plan_mode:
+            console.print(
+                f"[yellow]⊘ plano ativo:[/] [bold]{tool_name}[/] bloqueada. "
+                "Digite /executar pra sair do modo plano."
+            )
+            return False
         if not state.should_confirm(tool_name):
             return True
         args_preview = _preview_args(args)
@@ -81,7 +97,14 @@ def _make_confirm_cb(state: SessionState):
             f"[dim]{args_preview}[/]?"
         )
         try:
-            resp = console.input("[bold]› [/][dim]([/][green]s[/]im / [red]N[/]ão / [cyan]a[/]lways) [dim])[/] ").strip().lower()
+            resp = (
+                console.input(
+                    "[bold]› [/][dim]([/][green]s[/]im / [red]N[/]ão / "
+                    "[cyan]a[/]lways[dim])[/] "
+                )
+                .strip()
+                .lower()
+            )
         except (EOFError, KeyboardInterrupt):
             console.print("[dim](recusado)[/]")
             return False
@@ -263,8 +286,17 @@ def _repl(cfg: Config) -> None:
 
     state = SessionState()
     confirm_cb = _make_confirm_cb(state)
-    agent = Agent(client, registry, cfg.system_prompt(), confirm_cb=confirm_cb)
+    default_prompt = cfg.system_prompt()
+    agent = Agent(client, registry, default_prompt, confirm_cb=confirm_cb)
     renderer = EventRenderer()
+
+    # Carrega slash commands customizados do usuário
+    custom_commands = load_commands()
+    if custom_commands:
+        console.print(
+            f"[dim]slash commands customizados carregados: "
+            f"{', '.join('/' + n for n in custom_commands)}[/]"
+        )
 
     try:
         while True:
@@ -276,16 +308,20 @@ def _repl(cfg: Config) -> None:
 
             if not user_input:
                 continue
+
+            # --- comandos built-in ---
             if user_input in {"/sair", "/exit", "/quit"}:
                 console.print("[dim]até mais.[/]")
                 return
             if user_input == "/limpar":
                 agent.reset()
+                agent.set_system_prompt(default_prompt)
                 state.always_allow.clear()
+                state.plan_mode = False
                 console.print("[dim]histórico limpo.[/]")
                 continue
             if user_input == "/ajuda":
-                _print_help(registry)
+                _print_help(registry, custom_commands)
                 continue
             if user_input in {"/modelo", "/model"}:
                 new_profile = _switch_profile(client.profile)
@@ -304,7 +340,55 @@ def _repl(cfg: Config) -> None:
                     f"[dim](histórico preservado)[/]"
                 )
                 continue
+            if user_input in {"/plano", "/plan"}:
+                if state.plan_mode:
+                    console.print("[dim]já está em modo plano.[/]")
+                    continue
+                try:
+                    plan_prompt = _PLAN_MODE_PROMPT_PATH.read_text(encoding="utf-8")
+                except OSError:
+                    plan_prompt = (
+                        "Você está em modo de planejamento: use apenas tools "
+                        "read-only. Entregue um plano estruturado ao final."
+                    )
+                agent.set_system_prompt(plan_prompt)
+                state.plan_mode = True
+                console.print(
+                    "[yellow]◐ modo plano ativado[/] — tools destrutivas "
+                    "bloqueadas. Digite [cyan]/executar[/] pra sair."
+                )
+                continue
+            if user_input in {"/executar", "/exec", "/run"}:
+                if not state.plan_mode:
+                    console.print("[dim]não estava em modo plano.[/]")
+                    continue
+                agent.set_system_prompt(default_prompt)
+                state.plan_mode = False
+                console.print(
+                    "[green]▶ modo plano desativado[/] — tools destrutivas "
+                    "liberadas novamente (ainda pedem confirmação)."
+                )
+                continue
 
+            # --- slash commands customizados ---
+            parsed = parse_slash(user_input)
+            if parsed is not None:
+                cmd_name, cmd_args = parsed
+                if cmd_name in custom_commands:
+                    rendered = custom_commands[cmd_name].render(cmd_args)
+                    console.print(
+                        f"[dim]→ expandindo /{cmd_name} ({len(rendered)} chars)[/]"
+                    )
+                    user_input = rendered
+                else:
+                    # Slash desconhecido — não repassa pro modelo, evita confusão
+                    console.print(
+                        f"[red]comando desconhecido:[/] /{cmd_name}. "
+                        "Digite [cyan]/ajuda[/] pra ver os disponíveis."
+                    )
+                    continue
+
+            # --- turno do agent ---
             try:
                 final_text = agent.run_streaming(
                     user_input, on_event=renderer.handle
@@ -320,14 +404,27 @@ def _repl(cfg: Config) -> None:
         client.close()
 
 
-def _print_help(registry) -> None:
+def _print_help(registry, custom_commands: dict[str, SlashCommand] | None = None) -> None:
     console.print(
         "[bold]Comandos do REPL:[/]\n"
-        "  [cyan]/sair[/]    encerra a sessão\n"
-        "  [cyan]/limpar[/]  zera o histórico da conversa\n"
-        "  [cyan]/modelo[/]  troca de modelo (menu interativo)\n"
-        "  [cyan]/ajuda[/]   mostra esta mensagem\n\n"
-        f"[dim]Tools disponíveis: {', '.join(registry.names())}[/]"
+        "  [cyan]/sair[/]       encerra a sessão\n"
+        "  [cyan]/limpar[/]     zera o histórico da conversa\n"
+        "  [cyan]/modelo[/]     troca de modelo (menu interativo)\n"
+        "  [cyan]/plano[/]      ativa modo de planejamento (sem tools destrutivas)\n"
+        "  [cyan]/executar[/]   sai do modo plano\n"
+        "  [cyan]/ajuda[/]      mostra esta mensagem\n"
+    )
+    if custom_commands:
+        console.print("[bold]Slash commands customizados:[/]")
+        for name, cmd in custom_commands.items():
+            first_line = cmd.template.strip().splitlines()[0] if cmd.template.strip() else ""
+            preview = first_line[:80] + ("…" if len(first_line) > 80 else "")
+            console.print(f"  [cyan]/{name}[/]  [dim]{preview}[/]")
+        console.print(
+            f"[dim]  (arquivos em {commands_dir()})[/]"
+        )
+    console.print(
+        f"\n[dim]Tools disponíveis: {', '.join(registry.names())}[/]"
     )
 
 
