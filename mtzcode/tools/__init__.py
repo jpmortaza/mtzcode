@@ -8,6 +8,7 @@ from mtzcode.tools.glob import GlobTool
 from mtzcode.tools.grep import GrepTool
 from mtzcode.tools.read import ReadTool
 from mtzcode.tools.search import SearchCodeTool
+from mtzcode.tools.search_knowledge import SearchKnowledgeTool
 from mtzcode.tools.write import WriteTool
 
 
@@ -21,6 +22,7 @@ def default_registry() -> ToolRegistry:
             GlobTool(),
             GrepTool(),
             SearchCodeTool(),
+            SearchKnowledgeTool(),
         ]
     )
 
@@ -36,5 +38,6 @@ __all__ = [
     "GlobTool",
     "GrepTool",
     "SearchCodeTool",
+    "SearchKnowledgeTool",
     "default_registry",
 ]

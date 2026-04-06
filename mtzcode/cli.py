@@ -29,6 +29,11 @@ app = typer.Typer(
     add_completion=False,
     help="mtzcode — assistente de código local (Ollama), 100% offline.",
 )
+knowledge_app = typer.Typer(
+    add_completion=False,
+    help="Gerenciar knowledge bases (memória permanente de documentos).",
+)
+app.add_typer(knowledge_app, name="knowledge", help="Knowledge bases (docs permanentes).")
 console = Console()
 
 
@@ -653,6 +658,137 @@ def serve(
         )
     )
     run_server(host=host, port=port)
+
+
+@knowledge_app.command("add")
+def knowledge_add(
+    folder: str = typer.Argument(..., help="Pasta com os documentos a ingerir."),
+    name: str = typer.Option(..., "--name", "-n", help="Nome da knowledge base."),
+    clear: bool = typer.Option(
+        False, "--clear", help="Apaga a base antes de recriar."
+    ),
+) -> None:
+    """Cria ou atualiza uma knowledge base com documentos de uma pasta.
+
+    Suporta: .md, .txt, .rst, .yaml, .json, .csv, .html, .sql, .py, .js,
+    .pdf (se pypdf instalado), .docx (se python-docx instalado).
+    """
+    from mtzcode.knowledge import ingest_folder, knowledge_db_path
+    from mtzcode.rag import EmbeddingClient, EmbeddingError
+
+    src = Path(folder).expanduser().resolve()
+    if not src.exists() or not src.is_dir():
+        console.print(f"[red]pasta inválida:[/] {src}")
+        raise typer.Exit(1)
+
+    db_path = knowledge_db_path(name)
+    console.print(f"[dim]fonte: {src}[/]")
+    console.print(f"[dim]destino: {db_path}[/]\n")
+
+    try:
+        embedder = EmbeddingClient()
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]erro iniciando embedder:[/] {exc}")
+        raise typer.Exit(1) from exc
+
+    try:
+        with console.status("[dim]ingerindo...[/]", spinner="dots") as status:
+            def on_progress(p, rel):
+                status.update(
+                    f"[dim]{p.files_ingested} arquivos / "
+                    f"{p.chunks_created} chunks — {rel}[/]"
+                )
+            stats = ingest_folder(
+                name, src, embedder, on_progress=on_progress, clear_first=clear
+            )
+    except EmbeddingError as exc:
+        console.print(f"[red]erro no embedder:[/] {exc}")
+        raise typer.Exit(1) from exc
+    finally:
+        embedder.close()
+
+    console.print(
+        f"[green]✓ knowledge base '{name}' atualizada[/]\n"
+        f"  arquivos ingeridos: [bold]{stats.files_ingested}[/] "
+        f"de {stats.files_scanned} escaneados\n"
+        f"  chunks criados:     [bold]{stats.chunks_created}[/]\n"
+        f"  pulados:            [dim]{stats.files_skipped}[/]"
+    )
+
+
+@knowledge_app.command("list")
+def knowledge_list() -> None:
+    """Lista todas as knowledge bases existentes."""
+    from mtzcode.knowledge import knowledge_dir, list_knowledge_bases
+
+    bases = list_knowledge_bases()
+    if not bases:
+        console.print(
+            f"[dim]nenhuma knowledge base em {knowledge_dir()}\n"
+            "crie uma com: [cyan]mtzcode knowledge add --name <nome> <pasta>[/][/]"
+        )
+        return
+    console.print("[bold]Knowledge bases:[/]")
+    for name, path, size in bases:
+        console.print(
+            f"  [bold cyan]{name}[/]  [dim]({size / 1024:.0f} KB)[/]\n"
+            f"    [dim]{path}[/]"
+        )
+
+
+@knowledge_app.command("remove")
+def knowledge_remove(
+    name: str = typer.Argument(..., help="Nome da knowledge base a remover."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Pula confirmação."),
+) -> None:
+    """Remove uma knowledge base permanentemente."""
+    from mtzcode.knowledge import knowledge_db_path
+
+    path = knowledge_db_path(name)
+    if not path.exists():
+        console.print(f"[red]knowledge base '{name}' não existe.[/]")
+        raise typer.Exit(1)
+
+    if not yes:
+        confirm = typer.confirm(
+            f"remover '{name}' permanentemente ({path})?", default=False
+        )
+        if not confirm:
+            console.print("[dim]cancelado.[/]")
+            raise typer.Exit(0)
+
+    path.unlink()
+    console.print(f"[green]✓[/] knowledge base '{name}' removida")
+
+
+@knowledge_app.command("search")
+def knowledge_search(
+    query: str = typer.Argument(..., help="Consulta em linguagem natural."),
+    name: str = typer.Option(..., "--name", "-n", help="Nome da knowledge base."),
+    top_k: int = typer.Option(5, "--top-k", "-k", help="Quantos resultados."),
+) -> None:
+    """Busca numa knowledge base e imprime os hits (útil pra debug)."""
+    from mtzcode.knowledge import search_knowledge_base
+
+    try:
+        hits = search_knowledge_base(name, query, top_k=top_k)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1) from exc
+
+    if not hits:
+        console.print(f"[dim](nenhum resultado em '{name}' para '{query}')[/]")
+        return
+
+    for i, h in enumerate(hits, start=1):
+        console.print(
+            f"\n[bold cyan][{i}][/] {h.path}:{h.start_line}-{h.end_line}  "
+            f"[dim](score {h.score:.3f})[/]"
+        )
+        snippet = h.content.strip()
+        if len(snippet) > 500:
+            snippet = snippet[:500] + "..."
+        console.print(f"  {snippet}")
 
 
 @app.command()

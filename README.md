@@ -22,6 +22,8 @@
 - [Walkthrough do zero](#walkthrough-do-zero)
 - [Interface web](#-interface-web-recomendado)
 - [Interface CLI](#-interface-cli-terminal)
+- [Skills — especialistas plugáveis](#-skills--especialistas-plugáveis)
+- [Knowledge base — memória permanente](#-knowledge-base--memória-permanente)
 - [RAG — busca semântica no projeto](#-rag--busca-semântica-no-projeto)
 - [Perfis de modelo](#perfis-de-modelo)
 - [Slash commands customizados](#slash-commands-customizados)
@@ -56,14 +58,17 @@ uma resposta final — igual ao Claude Code.
 
 - ✅ **Duas interfaces** — web UI no navegador ou REPL no terminal
 - ✅ **Agent loop** com tool calling iterativo (estilo Claude Code)
-- ✅ **7 tools nativas**:
+- ✅ **8 tools nativas**:
   - `read` — lê arquivos com numeração de linhas
   - `write` — cria/sobrescreve arquivos
   - `edit` — substituição exata com **diff unified colorido**
   - `bash` — executa comandos shell com timeout
   - `glob` — busca arquivos por padrão
   - `grep` — busca conteúdo (usa ripgrep se disponível)
-  - `search_code` — **busca semântica** via embeddings locais (RAG)
+  - `search_code` — **busca semântica** no código via embeddings locais (RAG)
+  - `search_knowledge` — **busca semântica** em knowledge bases permanentes de documentos
+- ✅ **Skills** — pasta `skills/` com especialistas plugáveis (Python, SQL, code review, Git, etc). Comunidade pode contribuir via PR.
+- ✅ **Knowledge base** — ingestão de PDFs, Markdowns, docs em geral como memória permanente (ex: política da empresa, manuais internos)
 - ✅ **Streaming real de tokens** (CLI e web)
 - ✅ **Múltiplos perfis de modelo** com troca quente (CLI: `/modelo`, web: dropdown)
 - ✅ **RAG integrado** — indexação incremental com `nomic-embed-text`, search semântico como tool
@@ -350,6 +355,166 @@ você › onde está a lógica de parsing de tool calls?
 
 O agent decide sozinho que tools usar, executa, processa, responde. Você
 só pede em linguagem natural.
+
+---
+
+## 🎓 Skills — especialistas plugáveis
+
+**Skills** são prompts especializados que redefinem o comportamento do agent
+pra uma tarefa ou domínio específico. Quando você ativa uma skill, o mtzcode
+"vira" um especialista naquela área.
+
+### Usar uma skill existente
+
+```
+você › /skill
+Skills disponíveis:
+    python-expert (oficial) — Especialista em Python moderno...
+    javascript-expert (oficial) — Especialista em JS/TS...
+    sql-dba (oficial) — DBA, otimiza queries...
+    code-reviewer (oficial) — Code review crítico...
+    git-helper (oficial) — Git, conflitos, histórico...
+    writer-pt (oficial) — Revisa textos em português...
+
+você › /skill python-expert
+✓ skill ativada: python-expert
+
+você › como eu faço retry com backoff exponencial?
+  (agora o agent responde como um especialista em Python moderno)
+
+você › /skill off
+✓ skill desativada
+```
+
+### Skills oficiais (vêm com o mtzcode)
+
+| Skill | Descrição |
+|---|---|
+| `python-expert` | Python moderno, PEP 8, type hints, async, testing |
+| `javascript-expert` | JS/TS moderno, Node 20+, React, tooling |
+| `sql-dba` | Queries, otimização, EXPLAIN plans, indexação |
+| `code-reviewer` | Review crítico focado em bugs e segurança |
+| `git-helper` | Comandos git, conflitos, recuperação de commits |
+| `writer-pt` | Revisão de textos em português brasileiro |
+
+Estão em [`skills/`](skills/) no repositório — cada uma é um diretório com
+um `SKILL.md`.
+
+### Criar sua própria skill
+
+**Pessoal** (não compartilhada):
+
+```bash
+mkdir -p ~/.mtzcode/skills/minha-skill
+cat > ~/.mtzcode/skills/minha-skill/SKILL.md <<'EOF'
+---
+name: minha-skill
+description: Descrição curta da skill
+author: seu-nome
+---
+
+# Minha Skill
+
+Você é um especialista em [X]. Siga estas regras:
+
+1. ...
+2. ...
+
+## Estilo de resposta
+...
+EOF
+```
+
+Recarregue o REPL e ela aparece em `/skill`.
+
+**Contribuir pro repo oficial:**
+
+1. Fork este repositório
+2. Crie `skills/sua-skill/SKILL.md`
+3. Abra um PR
+
+Detalhes completos do formato em [skills/README.md](skills/README.md).
+
+---
+
+## 📚 Knowledge base — memória permanente
+
+Diferente do RAG de código, uma **knowledge base** é uma memória permanente
+de **documentos arbitrários**: política da empresa, manuais internos, PDFs
+de procedimentos, notas pessoais, documentação de um fornecedor, etc.
+
+Você pode ter **várias** (`empresa`, `projeto-x`, `receitas`) e o agent busca
+nelas via a tool `search_knowledge`.
+
+### Formatos suportados
+
+- **Texto:** `.md`, `.txt`, `.rst`, `.yaml`, `.json`, `.csv`, `.html`, `.sql`, `.py`, `.js` (e muitos outros)
+- **PDF:** `.pdf` (requer `pypdf` — instalado com `uv pip install -e .[docs]`)
+- **Word:** `.docx` (requer `python-docx` — idem)
+
+### Criar uma knowledge base
+
+```bash
+# Instale os extras se for usar PDF/docx
+uv pip install -e .[docs]
+
+# Ingestão — aponta pra uma pasta com os documentos
+mtzcode knowledge add --name empresa ~/docs/minha-empresa
+```
+
+Saída:
+
+```
+fonte: /Users/jeanmortaza/docs/minha-empresa
+destino: /Users/jeanmortaza/.mtzcode/knowledge/empresa.db
+
+✓ knowledge base 'empresa' atualizada
+  arquivos ingeridos: 47 de 50 escaneados
+  chunks criados:     312
+  pulados:            3
+```
+
+### Comandos `knowledge`
+
+```bash
+mtzcode knowledge add --name empresa ~/docs          # ingerir uma pasta
+mtzcode knowledge add --name empresa ~/docs --clear  # recomeçar do zero
+mtzcode knowledge list                                # listar bases
+mtzcode knowledge search "quantos dias de férias" --name empresa
+mtzcode knowledge remove empresa                      # apagar permanente
+```
+
+### Usar no REPL / Web UI
+
+Depois de criar a base, é só perguntar naturalmente. O agent decide sozinho
+quando usar `search_knowledge`:
+
+```
+você › qual a política de home office da empresa?
+  → tool search_knowledge (base='empresa', query='política de home office')
+  ← [1] politicas.md:1-13  (score 0.71)
+      Home Office: funcionários podem trabalhar remoto até 3 dias...
+
+  A política de home office permite até 3 dias remotos por semana.
+  Sextas são remotas por padrão.
+```
+
+### Onde os dados ficam
+
+Cada base vira um arquivo SQLite em `~/.mtzcode/knowledge/<nome>.db`.
+Backup e portabilidade triviais — é só um arquivo.
+
+### Casos de uso
+
+- **Empresa:** políticas, processos, código de conduta, manuais de
+  sistemas internos, documentação de fornecedores
+- **Projeto:** specs, decisões arquiteturais, RFCs antigas, contexto histórico
+- **Pessoal:** notas, bookmarks, receitas, anotações de estudo
+- **Legal/compliance:** contratos, políticas regulatórias
+
+> ⚠️ **Tudo fica local.** O mtzcode nunca envia seus documentos pra nenhum
+> servidor externo. O embedding é gerado pelo `nomic-embed-text` rodando no
+> Ollama local, e o índice é SQLite.
 
 ---
 
@@ -675,6 +840,8 @@ Todas opcionais. Coloque no `~/.zshrc` pra persistir.
 | `MTZCODE_EMBED_MODEL` | `nomic-embed-text` | Modelo de embeddings pro RAG |
 | `MTZCODE_EMBED_HOST` | `http://localhost:11434` | Host do Ollama pro embedder |
 | `MTZCODE_COMMANDS_DIR` | `~/.mtzcode/commands` | Diretório de slash commands customizados |
+| `MTZCODE_SKILLS_DIR` | `~/.mtzcode/skills` | Diretório de skills pessoais |
+| `MTZCODE_KNOWLEDGE_DIR` | `~/.mtzcode/knowledge` | Diretório das knowledge bases |
 | `GROQ_API_KEY` | — | Necessária pro perfil `groq-llama` |
 
 ---
@@ -772,6 +939,8 @@ mtzcode/
 - [x] **Fase 5 (parcial)** — Slash commands customizados, modo plano
 - [x] **Fase 6** — RAG completo (embeddings + índice SQLite + `search_code` tool)
 - [x] **Web UI** — FastAPI + HTML single-page estilo app do Claude, streaming real
+- [x] **Skills** — sistema de skills plugáveis + 6 skills oficiais
+- [x] **Knowledge base** — ingestão de docs (PDF, md, docx) como memória permanente
 - [ ] **Fase 7** — LoRA fine-tuning sobre logs de uso (especialização)
 - [ ] **MCP client** — conectar a servidores Model Context Protocol
 - [ ] **Persistência de histórico** — retomar conversas entre sessões
