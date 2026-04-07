@@ -994,12 +994,24 @@
   <!-- =============== PAINEL DIREITO =============== -->
   <aside class="panel" id="panel">
     <div class="panel-tabs">
-      <button class="panel-tab active" data-tab="skills">Habilidades</button>
+      <button class="panel-tab active" data-tab="todos">Tarefas</button>
+      <button class="panel-tab" data-tab="skills">Habilidades</button>
       <button class="panel-tab" data-tab="schedules">Agendamentos</button>
     </div>
     <div class="panel-body">
 
-      <div class="tab-pane active" id="tab-skills">
+      <div class="tab-pane active" id="tab-todos">
+        <div style="display:flex;gap:6px;margin-bottom:10px;">
+          <button class="panel-action" id="todos-refresh-btn" style="flex:1;">↻ atualizar</button>
+          <button class="panel-action" id="todos-clear-btn" style="flex:1;">🗑 limpar</button>
+        </div>
+        <div id="todos-summary" style="font-size:11px;color:var(--text-mute);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px;"></div>
+        <div id="todos-list">
+          <div class="empty-list">nenhuma tarefa — o assistente cria quando precisa</div>
+        </div>
+      </div>
+
+      <div class="tab-pane" id="tab-skills">
         <button class="panel-action" id="install-skill-btn">+ Instalar habilidade</button>
         <div id="skills-list">
           <div class="empty-list">carregando...</div>
@@ -1424,6 +1436,42 @@
   // ============================================================
   // Skills
   // ============================================================
+  async function loadTodos() {
+    try {
+      const data = await api('/api/todos');
+      const list = $('todos-list');
+      const sum = $('todos-summary');
+      const items = data.todos || [];
+      const s = data.summary || {};
+      if (!items.length) {
+        list.innerHTML = '<div class="empty-list">nenhuma tarefa — o assistente cria quando precisa</div>';
+        sum.textContent = '';
+        return;
+      }
+      sum.textContent = `${s.total || 0} total · ${s.completed || 0} done · ${s.in_progress || 0} em andamento · ${s.pending || 0} pendente`;
+      list.innerHTML = '';
+      items.forEach((t, i) => {
+        const row = document.createElement('div');
+        const status = t.status || 'pending';
+        const color = status === 'completed' ? 'var(--ok, #4ade80)'
+                   : status === 'in_progress' ? 'var(--accent)'
+                   : 'var(--text-mute)';
+        const icon = status === 'completed' ? '✓'
+                   : status === 'in_progress' ? '▶'
+                   : '○';
+        const deco = status === 'completed' ? 'line-through' : 'none';
+        row.style.cssText = `display:flex;gap:8px;padding:8px 10px;margin-bottom:4px;background:var(--bg-elev-2);border:1px solid var(--border);border-radius:6px;font-size:12px;align-items:flex-start;`;
+        row.innerHTML = `
+          <span style="color:${color};font-weight:bold;font-size:13px;line-height:1.2;">${icon}</span>
+          <span style="flex:1;color:var(--text);text-decoration:${deco};line-height:1.4;">${escapeHtml(t.content || '')}</span>
+        `;
+        list.appendChild(row);
+      });
+    } catch (e) {
+      console.warn('loadTodos falhou', e);
+    }
+  }
+
   async function loadSkills() {
     if (!features.skills) return;
     try {
@@ -2624,6 +2672,7 @@
       input.focus();
       // recarrega sessions, pois pode ter criado uma nova
       loadSessions();
+      loadTodos();
       // drena a fila — pega próximo e dispara
       if (state.queue.length) {
         const next = state.queue.shift();
@@ -2739,7 +2788,19 @@
         $$('.tab-pane').forEach(x => x.classList.remove('active'));
         t.classList.add('active');
         $('tab-' + t.dataset.tab).classList.add('active');
+        if (t.dataset.tab === 'todos') loadTodos();
       });
+    });
+
+    // todos
+    $('todos-refresh-btn').addEventListener('click', loadTodos);
+    $('todos-clear-btn').addEventListener('click', async () => {
+      if (!confirm('Limpar TODAS as tarefas?')) return;
+      try {
+        await api('/api/todos', { method: 'DELETE' });
+        loadTodos();
+        toast('tarefas limpas', 'warn');
+      } catch (e) { toast('falha: ' + e.message, 'error'); }
     });
 
     // skills / schedules
@@ -2837,13 +2898,18 @@
       loadSessions(),
       loadSkills(),
       loadSchedules(),
+      loadTodos(),
     ]);
     $('input').focus();
-    // polling leve
-    setInterval(() => {
-      loadSessions();
-      loadSchedules();
-    }, 30000);
+    // Recarrega sessões/schedules só quando a aba volta a ficar visível —
+    // evita spam de /api/sessions e /api/schedules a cada 30s em aba parada.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        loadSessions();
+        loadSchedules();
+        loadTodos();
+      }
+    });
   }
 
   boot();

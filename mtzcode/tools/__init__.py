@@ -47,6 +47,7 @@ from mtzcode.tools.screenshot import ScreenshotTool
 from mtzcode.tools.search import SearchCodeTool
 from mtzcode.tools.search_knowledge import SearchKnowledgeTool
 from mtzcode.tools.text_writer import TextWriterTool
+from mtzcode.tools.todo import TodoReadTool, TodoWriteTool
 from mtzcode.tools.web_fetch import WebFetchTool
 from mtzcode.tools.web_search import WebSearchTool
 from mtzcode.tools.write import WriteTool
@@ -66,6 +67,8 @@ TOOL_GROUPS: dict[str, list[type[Tool]]] = {
         SearchKnowledgeTool,
         BashTool,
         PythonExecTool,
+        TodoWriteTool,
+        TodoReadTool,
         WebFetchTool,
         OpenUrlTool,
     ],
@@ -169,6 +172,8 @@ __all__ = [
     "EditTool",
     "BashTool",
     "PythonExecTool",
+    "TodoWriteTool",
+    "TodoReadTool",
     "FindFilesTool",
     "FindImagesTool",
     "GlobTool",

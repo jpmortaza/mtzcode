@@ -523,6 +523,34 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "file": info}
 
+    # ==================================================================
+    # TODOs — lista de tarefas persistente (espelho da tool todo_write)
+    # ==================================================================
+    @app.get("/api/todos")
+    def todos_get() -> dict[str, Any]:
+        from mtzcode import todos as _t
+        data = _t.load_todos()
+        return {
+            "todos": data.get("todos") or [],
+            "updated_at": data.get("updated_at"),
+            "summary": _t.summarize(data.get("todos") or []),
+        }
+
+    @app.post("/api/todos")
+    def todos_set(req: dict[str, Any]) -> dict[str, Any]:
+        from mtzcode import todos as _t
+        items = req.get("todos") or []
+        try:
+            return _t.save_todos(items)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/api/todos")
+    def todos_clear() -> dict[str, Any]:
+        from mtzcode import todos as _t
+        _t.clear_todos()
+        return {"ok": True}
+
     @app.post("/api/chat/attach")
     async def chat_attach(file: UploadFile = File(...)) -> dict[str, Any]:
         """Recebe um arquivo do chat e salva em ~/.mtzcode/uploads/.
