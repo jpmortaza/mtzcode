@@ -19,11 +19,14 @@ class NotifyArgs(BaseModel):
 
 
 class NotifyTool(Tool):
-    name = "notify"
+    name = "macos_desktop_notification"
     destructive = False
     description = (
-        "Mostra uma notificação nativa do macOS. Útil pra alertar o usuário quando "
-        "tarefas em background terminam."
+        "ATENÇÃO: dispara um POPUP NATIVO DO macOS (canto superior direito da tela), "
+        "NÃO uma resposta no chat. NUNCA use isto pra responder ao usuário, dar "
+        "feedback de progresso, ou comunicar resultado de tarefa — use texto comum. "
+        "USO ÚNICO: alertar o usuário quando uma tarefa LONGA em background terminar "
+        "e ele pode estar com a janela do mtzcode minimizada."
     )
     Args = NotifyArgs
 

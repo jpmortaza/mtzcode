@@ -2618,7 +2618,9 @@
       return;
     }
     state.busy = true;
-    $('send-btn').disabled = true;
+    // NÃO desabilitamos o botão — usuário precisa poder enfileirar
+    // mensagens enquanto a anterior roda. O check `if (state.busy)`
+    // acima já redireciona a próxima chamada pra enqueueMessage.
     input.value = '';
     const sentAttachments = state.attachments.slice();
     state.attachments = [];
@@ -2670,7 +2672,7 @@
       setStatus('erro', true);
     } finally {
       state.busy = false;
-      $('send-btn').disabled = false;
+      $('send-btn').disabled = false;  // garantia (caso versão antiga do estado tenha desabilitado)
       setStatus('pronto');
       input.focus();
       // recarrega sessions, pois pode ter criado uma nova

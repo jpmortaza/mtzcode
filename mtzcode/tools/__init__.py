@@ -98,15 +98,18 @@ TOOL_GROUPS: dict[str, list[type[Tool]]] = {
         GhPushFolderTool,
         GhAnalyzeRepoTool,
     ],
-    # MACOS: controle do sistema (apps, notificações, clipboard, screenshot)
+    # MACOS: controle do sistema (apps, clipboard, screenshot)
+    # NOTA: NotifyTool foi tirado do default — modelos locais confundiam
+    # `notify` com "responder ao usuário" e disparavam popups em vez de
+    # texto. Pra reativar use o grupo "macos-notify" explicitamente.
     "macos": [
         AppleScriptTool,
         ClipboardReadTool,
         ClipboardWriteTool,
-        NotifyTool,
         ScreenshotTool,
         OpenAppTool,
     ],
+    "macos-notify": [NotifyTool],
     # SUPERPOWERS: busca em qualquer lugar do disco via Spotlight
     "superpowers": [
         FindFilesTool,
@@ -145,7 +148,10 @@ def _build_inner_registry(groups: list[str] | None = None) -> ToolRegistry:
     """
     requested = _resolve_groups(groups)
     if "all" in requested:
-        requested = list(TOOL_GROUPS.keys())
+        # "all" exclui grupos marcados como opt-in (NotifyTool atrapalha
+        # demais o modelo local — só carrega se explicitamente listado).
+        opt_in = {"macos-notify"}
+        requested = [g for g in TOOL_GROUPS.keys() if g not in opt_in]
 
     seen: set[type[Tool]] = set()
     tools: list[Tool] = []
