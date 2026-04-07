@@ -29,6 +29,22 @@ class ModelOptions:
     top_p: float = 0.9
     keep_alive: str = "30m"
 
+    def __post_init__(self) -> None:
+        # Clamp em vez de raise: settings carregadas de disco podem estar
+        # corrompidas e não queremos quebrar o startup. Logamos clamp implícito.
+        if self.num_ctx < 4096:
+            self.num_ctx = 4096
+        if self.num_ctx > 131072:
+            self.num_ctx = 131072
+        if self.num_predict < 256:
+            self.num_predict = 256
+        if self.num_predict > 16384:
+            self.num_predict = 16384
+        if not (0.0 <= self.temperature <= 2.0):
+            self.temperature = 0.3
+        if not (0.0 < self.top_p <= 1.0):
+            self.top_p = 0.9
+
 
 @dataclass
 class Settings:
@@ -107,16 +123,21 @@ class Settings:
                 self.api_keys[k] = str(v) if v is not None else ""
         if "model_options" in data and isinstance(data["model_options"], dict):
             mo = data["model_options"]
-            if "num_ctx" in mo:
-                self.model_options.num_ctx = int(mo["num_ctx"])
-            if "num_predict" in mo:
-                self.model_options.num_predict = int(mo["num_predict"])
-            if "temperature" in mo:
-                self.model_options.temperature = float(mo["temperature"])
-            if "top_p" in mo:
-                self.model_options.top_p = float(mo["top_p"])
-            if "keep_alive" in mo:
-                self.model_options.keep_alive = str(mo["keep_alive"])
+            try:
+                if "num_ctx" in mo:
+                    self.model_options.num_ctx = int(mo["num_ctx"])
+                if "num_predict" in mo:
+                    self.model_options.num_predict = int(mo["num_predict"])
+                if "temperature" in mo:
+                    self.model_options.temperature = float(mo["temperature"])
+                if "top_p" in mo:
+                    self.model_options.top_p = float(mo["top_p"])
+                if "keep_alive" in mo:
+                    self.model_options.keep_alive = str(mo["keep_alive"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"model_options inválidas: {exc}") from exc
+            # Re-aplica clamps de __post_init__
+            self.model_options.__post_init__()
         if "personal_context" in data:
             self.personal_context = str(data["personal_context"] or "")
         if "data_folder" in data:

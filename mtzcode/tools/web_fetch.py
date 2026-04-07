@@ -47,18 +47,28 @@ class WebFetchTool(Tool):
             ) from exc
 
         url = str(args.url)
+        # Pydantic HttpUrl já valida scheme, mas reforçamos pra rejeitar
+        # data:, javascript:, file: caso alguém burle o cast.
+        if not url.lower().startswith(("http://", "https://")):
+            raise ToolError(f"scheme não suportado: {url} (use http/https)")
+
         try:
             response = httpx.get(
                 url,
                 timeout=DEFAULT_TIMEOUT,
                 follow_redirects=True,
+                max_redirects=5,
                 headers={"User-Agent": USER_AGENT},
             )
         except httpx.HTTPError as exc:
             raise ToolError(f"falha ao baixar {url}: {exc}") from exc
 
-        content_type = response.headers.get("content-type", "").lower()
+        # Valida URL final (após redirects) — não pode ter sido pra esquema esquisito.
         final_url = str(response.url)
+        if not final_url.lower().startswith(("http://", "https://")):
+            raise ToolError(f"redirect levou a scheme inseguro: {final_url}")
+
+        content_type = response.headers.get("content-type", "").lower()
         status = response.status_code
 
         # Decide o corpo: HTML vira markdown (a menos que raw=True), resto vai como texto.

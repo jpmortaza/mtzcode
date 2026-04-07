@@ -158,6 +158,52 @@ def make_event_callback(
     return _cb
 
 
+def cleanup_old_sessions(
+    log_dir: Path | None = None,
+    *,
+    max_age_days: int = 60,
+    max_files: int = 500,
+) -> dict[str, Any]:
+    """Remove logs antigos do diretório de sessão.
+
+    Critérios (ambos aplicados):
+      - Apaga arquivos `session-*.jsonl` mais velhos que ``max_age_days``.
+      - Mantém no máximo ``max_files`` arquivos (mais recentes vencem).
+
+    Retorna dict com `removed: int` e `kept: int`. Falhas individuais
+    são engolidas pra não quebrar startup.
+    """
+    import time as _time
+
+    base = Path(log_dir) if log_dir is not None else DEFAULT_LOG_DIR
+    if not base.exists():
+        return {"removed": 0, "kept": 0}
+
+    cutoff = _time.time() - (max_age_days * 86400)
+    files = sorted(
+        base.glob("session-*.jsonl"),
+        key=lambda p: p.stat().st_mtime if p.exists() else 0,
+        reverse=True,
+    )
+    removed = 0
+    survivors: list[Path] = []
+    for idx, p in enumerate(files):
+        try:
+            mtime = p.stat().st_mtime
+        except OSError:
+            continue
+        # Excede limite de quantidade ou está muito antigo? Remove.
+        if idx >= max_files or mtime < cutoff:
+            try:
+                p.unlink()
+                removed += 1
+            except OSError:
+                pass
+        else:
+            survivors.append(p)
+    return {"removed": removed, "kept": len(survivors)}
+
+
 def list_sessions(log_dir: Path | None = None) -> list[dict]:
     """Lista as sessões disponíveis no diretório de logs.
 

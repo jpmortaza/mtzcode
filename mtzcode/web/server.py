@@ -516,8 +516,17 @@ def create_app() -> FastAPI:
     @app.post("/api/training/upload")
     async def training_upload(file: UploadFile = File(...)) -> dict[str, Any]:
         from mtzcode import training as _t
+        # Valida extensão e tamanho ANTES de ler tudo na memória
+        fname = (file.filename or "").lower()
+        if not (fname.endswith(".jsonl") or fname.endswith(".json") or fname.endswith(".txt") or fname.endswith(".md")):
+            raise HTTPException(status_code=400, detail="aceito apenas .jsonl/.json/.txt/.md")
+        max_bytes = 500 * 1024 * 1024  # 500MB
+        if getattr(file, "size", None) and file.size and file.size > max_bytes:
+            raise HTTPException(status_code=413, detail="arquivo grande demais (>500MB)")
         try:
             content = await file.read()
+            if len(content) > max_bytes:
+                raise HTTPException(status_code=413, detail="arquivo grande demais (>500MB)")
             info = _t.save_dataset(file.filename or "unnamed.jsonl", content)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -617,12 +626,16 @@ def create_app() -> FastAPI:
         safe = Path(file.filename or "anexo.bin").name
         if not safe or safe.startswith("."):
             safe = "anexo.bin"
+        # Valida tamanho declarado ANTES de ler (evita DoS por upload gigante)
+        max_bytes = 50 * 1024 * 1024
+        if getattr(file, "size", None) and file.size and file.size > max_bytes:
+            raise HTTPException(status_code=413, detail="arquivo grande demais (>50MB)")
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         target = uploads_dir / f"{ts}-{safe}"
         try:
             content = await file.read()
-            if len(content) > 50 * 1024 * 1024:
-                raise HTTPException(status_code=400, detail="arquivo grande demais (>50MB)")
+            if len(content) > max_bytes:
+                raise HTTPException(status_code=413, detail="arquivo grande demais (>50MB)")
             target.write_bytes(content)
         except OSError as exc:
             raise HTTPException(status_code=500, detail=f"falha ao salvar: {exc}") from exc
@@ -677,6 +690,8 @@ def create_app() -> FastAPI:
     @app.get("/api/training/logs")
     def training_logs(lines: int = 200) -> dict[str, Any]:
         from mtzcode import training as _t
+        # Clamp pra evitar OOM se cliente pedir milhões de linhas
+        lines = max(1, min(int(lines or 200), 5000))
         return {"log": _t.tail_log(max_lines=lines), "job": _t.get_job().to_dict()}
 
     @app.get("/api/browse")
@@ -1166,10 +1181,18 @@ def create_app() -> FastAPI:
     # HISTORY
     # ==================================================================
     @app.get("/api/history")
-    def history_get() -> dict[str, Any]:
-        """Retorna o histórico atual do agent (filtrado e truncado pra UI)."""
+    def history_get(skip: int = 0, limit: int = 200) -> dict[str, Any]:
+        """Retorna o histórico atual do agent paginado.
+
+        Sem paginação, históricos longos (>5k msgs) travam a UI no GET.
+        """
+        skip = max(0, int(skip or 0))
+        limit = max(1, min(int(limit or 200), 1000))
+        full = session.agent.history
+        total = len(full)
+        slice_ = full[skip : skip + limit]
         out: list[dict[str, Any]] = []
-        for msg in session.agent.history:
+        for msg in slice_:
             role = msg.get("role", "")
             content = msg.get("content", "") or ""
             if isinstance(content, str) and len(content) > 2000:
@@ -1177,7 +1200,6 @@ def create_app() -> FastAPI:
             entry: dict[str, Any] = {"role": role, "content": content}
             tcs = msg.get("tool_calls")
             if tcs:
-                # Resumo enxuto pra não pesar.
                 entry["tool_calls"] = [
                     {
                         "name": (tc.get("function", {}) or {}).get("name", ""),
@@ -1189,7 +1211,13 @@ def create_app() -> FastAPI:
                 entry["name"] = msg.get("name")
                 entry["tool_call_id"] = msg.get("tool_call_id")
             out.append(entry)
-        return {"history": out, "count": len(out)}
+        return {
+            "history": out,
+            "count": len(out),
+            "total": total,
+            "skip": skip,
+            "limit": limit,
+        }
 
     return app
 

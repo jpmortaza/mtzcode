@@ -95,10 +95,13 @@ def _searxng(httpx_mod, base_url: str, args: WebSearchArgs) -> list[dict[str, st
     payload = response.json()
     out: list[dict[str, str]] = []
     for item in payload.get("results", []):
+        url = (item.get("url") or "").strip()
+        if not _is_safe_http_url(url):
+            continue
         out.append(
             {
                 "title": (item.get("title") or "").strip(),
-                "url": (item.get("url") or "").strip(),
+                "url": url,
                 "snippet": (item.get("content") or "").strip(),
             }
         )
@@ -170,19 +173,36 @@ def _regex_ddg(html: str) -> list[dict[str, str]]:
     return results
 
 
+def _is_safe_http_url(url: str) -> bool:
+    """Aceita apenas http(s) absolutos. Bloqueia javascript:, data:, file:, etc."""
+    if not url:
+        return False
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+    return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+
+
 def _clean_ddg_url(href: str) -> str:
-    """Decodifica os links de redirect do DuckDuckGo (uddg=...)."""
+    """Decodifica os links de redirect do DuckDuckGo (uddg=...).
+
+    Sempre retorna URL http(s) ou string vazia (descarta o resultado).
+    """
     if not href:
         return ""
-    # Links do DDG vêm como //duckduckgo.com/l/?uddg=<encoded>
     if href.startswith("//"):
         href = "https:" + href
-    parsed = urlparse(href)
+    try:
+        parsed = urlparse(href)
+    except Exception:
+        return ""
     if "duckduckgo.com" in parsed.netloc and parsed.path.startswith("/l/"):
         qs = parse_qs(parsed.query)
         if "uddg" in qs:
-            return unquote(qs["uddg"][0])
-    return href
+            decoded = unquote(qs["uddg"][0])
+            return decoded if _is_safe_http_url(decoded) else ""
+    return href if _is_safe_http_url(href) else ""
 
 
 def _format_results(results: list[dict[str, str]]) -> str:

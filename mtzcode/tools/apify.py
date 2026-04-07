@@ -49,6 +49,19 @@ def _httpx():
     return httpx
 
 
+def _auth_headers(token: str) -> dict[str, str]:
+    """Header padrão Apify (Bearer) — evita vazar token em URL/params em logs."""
+    return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+
+
+def _safe_error_body(text: str, token: str) -> str:
+    """Mascara o token em qualquer eco da request antes de devolver pro modelo."""
+    snippet = (text or "")[:400]
+    if token:
+        snippet = snippet.replace(token, "***")
+    return snippet
+
+
 def _truncate(text: str, limit: int = MAX_RESULT_CHARS) -> str:
     if len(text) <= limit:
         return text
@@ -105,19 +118,20 @@ class ApifyRunActorTool(Tool):
         actor = args.actor_id.replace("/", "~")
         # Endpoint sync: roda o actor e já devolve os dataset items
         url = f"{APIFY_BASE}/acts/{actor}/run-sync-get-dataset-items"
-        params = {"token": token, "timeout": str(args.timeout_s), "limit": str(args.max_items)}
+        params = {"timeout": str(args.timeout_s), "limit": str(args.max_items)}
         try:
             r = httpx.post(
                 url,
                 params=params,
                 json=args.input or {},
                 timeout=DEFAULT_TIMEOUT,
+                headers=_auth_headers(token),
             )
         except httpx.HTTPError as exc:
             raise ToolError(f"falha de rede chamando Apify: {exc}") from exc
         if r.status_code >= 400:
             raise ToolError(
-                f"Apify respondeu {r.status_code}: {r.text[:400]}"
+                f"Apify respondeu {r.status_code}: {_safe_error_body(r.text, token)}"
             )
         # O endpoint devolve uma JSON array dos items
         try:
@@ -170,22 +184,24 @@ class ApifyListActorsTool(Tool):
         httpx = _httpx()
         token = _api_token()
         if args.search:
-            # Store pública — não precisa auth, mas mandamos o token mesmo
             url = f"{APIFY_BASE}/store"
-            params = {
-                "token": token,
-                "search": args.search,
-                "limit": str(args.limit),
-            }
+            params = {"search": args.search, "limit": str(args.limit)}
         else:
             url = f"{APIFY_BASE}/acts"
-            params = {"token": token, "limit": str(args.limit), "my": "true"}
+            params = {"limit": str(args.limit), "my": "true"}
         try:
-            r = httpx.get(url, params=params, timeout=DEFAULT_TIMEOUT)
+            r = httpx.get(
+                url,
+                params=params,
+                timeout=DEFAULT_TIMEOUT,
+                headers=_auth_headers(token),
+            )
         except httpx.HTTPError as exc:
             raise ToolError(f"falha de rede chamando Apify: {exc}") from exc
         if r.status_code >= 400:
-            raise ToolError(f"Apify respondeu {r.status_code}: {r.text[:400]}")
+            raise ToolError(
+                f"Apify respondeu {r.status_code}: {_safe_error_body(r.text, token)}"
+            )
         try:
             data = r.json()
         except json.JSONDecodeError:
@@ -239,18 +255,24 @@ class ApifyGetDatasetTool(Tool):
         token = _api_token()
         url = f"{APIFY_BASE}/datasets/{args.dataset_id}/items"
         params = {
-            "token": token,
             "limit": str(args.limit),
             "offset": str(args.offset),
             "format": "json",
             "clean": "true",
         }
         try:
-            r = httpx.get(url, params=params, timeout=DEFAULT_TIMEOUT)
+            r = httpx.get(
+                url,
+                params=params,
+                timeout=DEFAULT_TIMEOUT,
+                headers=_auth_headers(token),
+            )
         except httpx.HTTPError as exc:
             raise ToolError(f"falha de rede chamando Apify: {exc}") from exc
         if r.status_code >= 400:
-            raise ToolError(f"Apify respondeu {r.status_code}: {r.text[:400]}")
+            raise ToolError(
+                f"Apify respondeu {r.status_code}: {_safe_error_body(r.text, token)}"
+            )
         try:
             items = r.json()
         except json.JSONDecodeError:

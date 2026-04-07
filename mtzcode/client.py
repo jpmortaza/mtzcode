@@ -8,9 +8,22 @@ from __future__ import annotations
 import copy
 import json
 import os
+import time
 from typing import Any, Iterable
 
 import httpx
+
+
+# Status codes considerados transientes (vale a pena retry com backoff)
+_TRANSIENT_STATUS = {408, 425, 429, 500, 502, 503, 504}
+# Exceções de rede transientes
+_TRANSIENT_EXC = (
+    httpx.ConnectError,
+    httpx.ReadTimeout,
+    httpx.WriteTimeout,
+    httpx.PoolTimeout,
+    httpx.RemoteProtocolError,
+)
 
 from mtzcode.profiles import Profile
 
@@ -28,9 +41,16 @@ class ChatClient:
     serviço que exponha `/chat/completions` no formato OpenAI.
     """
 
-    def __init__(self, profile: Profile, timeout_s: float = 300.0) -> None:
+    def __init__(
+        self,
+        profile: Profile,
+        timeout_s: float = 300.0,
+        connect_timeout_s: float = 10.0,
+        max_retries: int = 2,
+    ) -> None:
         self.profile = profile
         self.model = profile.model
+        self._max_retries = max(0, int(max_retries))
 
         api_key = "ollama"  # placeholder — Ollama não verifica
         if profile.needs_api_key:
@@ -41,9 +61,11 @@ class ChatClient:
                     f"necessária para usar {profile.label}."
                 )
 
+        # Timeout fino: connect curto, read longo (Ollama pode demorar pra "aquecer" modelo)
+        timeout = httpx.Timeout(timeout_s, connect=connect_timeout_s)
         self._client = httpx.Client(
             base_url=profile.base_url,
-            timeout=timeout_s,
+            timeout=timeout,
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
@@ -65,13 +87,7 @@ class ChatClient:
             payload["tools"] = list(tools)
         self._inject_backend_options(payload)
 
-        try:
-            response = self._client.post("/chat/completions", json=payload)
-        except httpx.HTTPError as exc:
-            raise ChatClientError(
-                f"falha ao conectar em {self.profile.base_url}: {exc}"
-            ) from exc
-
+        response = self._post_with_retry("/chat/completions", payload)
         if response.status_code != 200:
             raise ChatClientError(
                 self._format_http_error(response.status_code, response.text)
@@ -128,6 +144,33 @@ class ChatClient:
             raise ChatClientError(
                 f"falha ao conectar em {self.profile.base_url}: {exc}"
             ) from exc
+
+    def _post_with_retry(self, path: str, payload: dict[str, Any]) -> httpx.Response:
+        """POST com retry exponencial para erros transientes (rede + 5xx/429).
+
+        Não tenta de novo em 4xx (exceto 408/425/429): erro do cliente,
+        retentativa não muda o resultado.
+        """
+        last_exc: Exception | None = None
+        for attempt in range(self._max_retries + 1):
+            try:
+                response = self._client.post(path, json=payload)
+                if response.status_code in _TRANSIENT_STATUS and attempt < self._max_retries:
+                    time.sleep(min(8.0, 0.5 * (2 ** attempt)))
+                    continue
+                return response
+            except _TRANSIENT_EXC as exc:
+                last_exc = exc
+                if attempt >= self._max_retries:
+                    break
+                time.sleep(min(8.0, 0.5 * (2 ** attempt)))
+            except httpx.HTTPError as exc:
+                raise ChatClientError(
+                    f"falha ao conectar em {self.profile.base_url}: {exc}"
+                ) from exc
+        raise ChatClientError(
+            f"falha ao conectar em {self.profile.base_url} após {self._max_retries + 1} tentativa(s): {last_exc}"
+        ) from last_exc
 
     def _inject_backend_options(self, payload: dict[str, Any]) -> None:
         """Injeta opções específicas do backend no payload.
