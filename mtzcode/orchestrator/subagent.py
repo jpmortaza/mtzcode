@@ -19,7 +19,6 @@ from __future__ import annotations
 from typing import Any
 
 from mtzcode import runtime
-from mtzcode.agent import Agent
 from mtzcode.tools.base import Tool, ToolError, ToolRegistry
 
 # Tools que NUNCA são herdadas pelo sub-agente: planning e spawning são
@@ -108,6 +107,10 @@ def run_subagent(
             f"profundidade máxima de sub-agentes atingida "
             f"({runtime.MAX_SUBAGENT_DEPTH}). Sub-agente não pode delegar mais."
         )
+
+    # Import lazy pra evitar ciclo: tools/__init__ -> tools/orchestrator
+    # -> subagent -> agent -> tools/base -> tools/__init__ (loop).
+    from mtzcode.agent import Agent
 
     sub_registry = _filter_registry(parent_ctx.registry, tools)
 
