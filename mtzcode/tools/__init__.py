@@ -46,6 +46,7 @@ from mtzcode.tools.orchestrator import (
     PlanSetStatusTool,
     PlanShowTool,
     PlanTaskTool,
+    SpawnAgentTool,
 )
 from mtzcode.tools.pdf import PdfFromMarkdownTool, PdfReadTool
 from mtzcode.tools.python_exec import PythonExecTool
@@ -81,6 +82,7 @@ TOOL_GROUPS: dict[str, list[type[Tool]]] = {
         PlanSetStatusTool,
         PlanAdvanceTool,
         PlanListTool,
+        SpawnAgentTool,
         WebFetchTool,
         OpenUrlTool,
     ],
@@ -191,6 +193,7 @@ __all__ = [
     "PlanSetStatusTool",
     "PlanAdvanceTool",
     "PlanListTool",
+    "SpawnAgentTool",
     "FindFilesTool",
     "FindImagesTool",
     "GlobTool",

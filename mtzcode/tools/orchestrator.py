@@ -23,6 +23,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from mtzcode import orchestrator as _orch
+from mtzcode.orchestrator.subagent import run_subagent
 from mtzcode.tools.base import Tool, ToolError
 
 
@@ -208,6 +209,75 @@ class PlanListTool(Tool):
                 f"{p.get('phases')}f/{p.get('tasks')}t  — {p.get('goal')}"
             )
         return "\n".join(lines)
+
+
+# ----------------------------- spawn_agent -------------------------------
+
+
+class SpawnAgentArgs(BaseModel):
+    task: str = Field(
+        ...,
+        description=(
+            "Tarefa CONCRETA e isolada pro sub-agente executar. Deve ser auto-contida: "
+            "o sub-agente não vê o histórico do principal. Inclua os caminhos, nomes e "
+            "contexto necessários direto na descrição."
+        ),
+    )
+    role: str = Field(
+        "executor",
+        description=(
+            "Papel do sub-agente em uma frase. Ex: 'pesquisador web', "
+            "'implementador de backend Python', 'redator técnico', 'verificador de testes'."
+        ),
+    )
+    tools: list[str] | None = Field(
+        None,
+        description=(
+            "Subset de tools que o sub-agente pode usar (nomes exatos, ex: "
+            "['read', 'write', 'bash']). Vazio = herda tudo do pai (menos planning/spawn). "
+            "MENOS é melhor — escopo restrito = sub-agente mais focado e rápido."
+        ),
+    )
+    max_iterations: int = Field(
+        12,
+        description="Limite de iterações do loop do sub-agente. Default 12, máx 25.",
+        ge=1,
+        le=25,
+    )
+
+
+class SpawnAgentTool(Tool):
+    name = "spawn_agent"
+    destructive = False
+    description = (
+        "Delega uma tarefa específica e isolada pra um SUB-AGENTE. Use quando: "
+        "(a) a tarefa pode ser feita de forma auto-contida com poucos resultados; "
+        "(b) explorar/pesquisar gastaria muito contexto no histórico principal; "
+        "(c) você quer paralelizar / isolar trabalho de uma fase do plano. "
+        "O sub-agente recebe só a `task` (sem ver seu histórico), executa com "
+        "as tools que você listar, e devolve uma string curta com o resultado. "
+        "NÃO use pra coisas triviais — o overhead de spin-up não compensa."
+    )
+    Args = SpawnAgentArgs
+
+    def run(self, args: SpawnAgentArgs) -> str:  # type: ignore[override]
+        try:
+            outcome = run_subagent(
+                task=args.task,
+                role=args.role,
+                tools=args.tools,
+                max_iterations=args.max_iterations,
+            )
+        except ToolError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise ToolError(f"spawn_agent falhou: {exc}") from exc
+        meta = (
+            f"[sub-agente terminou — depth={outcome['depth']}, "
+            f"iters={outcome['iterations']}, tool_calls={outcome['tool_calls']}]"
+        )
+        result = outcome.get("result") or "(sub-agente devolveu vazio)"
+        return f"{meta}\n{result}"
 
 
 # ----------------------------- helpers -----------------------------------

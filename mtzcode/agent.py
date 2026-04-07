@@ -11,6 +11,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterator
 
+from mtzcode import runtime as _runtime
 from mtzcode.client import ChatClient, ChatClientError
 from mtzcode.tools.base import Tool, ToolError, ToolRegistry
 
@@ -61,12 +62,17 @@ class Agent:
         system_prompt: str,
         max_iterations: int = MAX_ITERATIONS,
         confirm_cb: ConfirmCallback | None = None,
+        *,
+        runtime_label: str = "main",
+        runtime_depth: int | None = None,
     ) -> None:
         self.client = client
         self.registry = registry
         self.system_prompt = system_prompt
         self.max_iterations = max_iterations
         self.confirm_cb = confirm_cb
+        self.runtime_label = runtime_label
+        self.runtime_depth = runtime_depth
         self.history: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt}
         ]
@@ -86,6 +92,15 @@ class Agent:
     # Modo síncrono — espera a resposta completa antes de devolver.
     # ------------------------------------------------------------------
     def run(self, user_message: str, on_event: EventCallback | None = None) -> str:
+        with _runtime.activate(
+            client=self.client,
+            registry=self.registry,
+            label=self.runtime_label,
+            depth=self.runtime_depth,
+        ):
+            return self._run_inner(user_message, on_event)
+
+    def _run_inner(self, user_message: str, on_event: EventCallback | None) -> str:
         self.history.append({"role": "user", "content": user_message})
         on_event = on_event or (lambda _e: None)
         final_text = ""
@@ -133,6 +148,17 @@ class Agent:
     # ------------------------------------------------------------------
     def run_streaming(
         self, user_message: str, on_event: EventCallback | None = None
+    ) -> str:
+        with _runtime.activate(
+            client=self.client,
+            registry=self.registry,
+            label=self.runtime_label,
+            depth=self.runtime_depth,
+        ):
+            return self._run_streaming_inner(user_message, on_event)
+
+    def _run_streaming_inner(
+        self, user_message: str, on_event: EventCallback | None
     ) -> str:
         self.history.append({"role": "user", "content": user_message})
         on_event = on_event or (lambda _e: None)
