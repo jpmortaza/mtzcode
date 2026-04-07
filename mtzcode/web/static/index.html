@@ -2688,6 +2688,11 @@
       if (kind === 'text_delta') {
         streamedText += data.delta;
         renderMarkdown(body, streamedText);
+      } else if (kind === 'text_clear' || kind === 'text_suppress_start') {
+        // O backend percebeu que o texto streamado era na verdade JSON de
+        // tool call mascarada. Apaga da UI pra não mostrar lixo.
+        streamedText = '';
+        renderMarkdown(body, '');
       } else if (kind === 'tool_call') {
         const { tool, result } = addToolCall(data.name, data.args);
         body.appendChild(tool);

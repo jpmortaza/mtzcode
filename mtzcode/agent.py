@@ -172,11 +172,18 @@ class Agent:
                 raise
 
             # Fallback: se não veio tool_calls estruturado, tenta parsear do content
+            streamed_was_tool_call = False
             if not tool_calls and content:
                 extracted, leftover = _extract_tool_calls_from_content(content)
                 if extracted:
                     tool_calls = extracted
+                    # Se o stream visual já mostrou esse JSON e ele virou
+                    # tool call, manda um text_clear pro frontend apagar.
+                    if len(content) - len(leftover) > 20:
+                        streamed_was_tool_call = True
                     content = leftover
+            if streamed_was_tool_call:
+                on_event(AgentEvent("text_clear", {}))
 
             self._append_assistant(content, tool_calls)
 
@@ -248,12 +255,19 @@ class Agent:
             content_delta = delta.get("content")
             if content_delta:
                 content += content_delta
-                # Detecta tool call mascarada como JSON pra NÃO mostrar ela
-                # piscando no chat. Heurística: ```json + {"name" OU "function"
-                # OU "tool" — bem específico pra não pegar code blocks reais.
-                if not suppress_visual and _looks_like_inline_tool_call(content):
-                    suppress_visual = True
-                    on_event(AgentEvent("text_suppress_start", {}))
+                # Detecta tool call mascarada — fence ```json OU JSON cru
+                # começando com `{`. O suppress envia text_clear pro UI
+                # apagar o que já foi mostrado.
+                if not suppress_visual:
+                    stripped = content.lstrip()
+                    if stripped.startswith("{") and len(stripped) >= 2:
+                        # JSON cru no início = quase certeza de tool call
+                        # mascarada (resposta normal nunca começa com `{`).
+                        suppress_visual = True
+                    elif _looks_like_inline_tool_call(content):
+                        suppress_visual = True
+                    if suppress_visual:
+                        on_event(AgentEvent("text_suppress_start", {}))
                 if not suppress_visual:
                     on_event(AgentEvent("text_delta", {"delta": content_delta}))
 
@@ -361,21 +375,33 @@ def _looks_like_tool_call_attempt(text: str) -> bool:
 
 
 # Heurística mais específica pra streaming: detecta SE estamos no meio de
-# uma tool call mascarada como ```json. Usado pra suprimir text_delta visual.
-_INLINE_TC_RE = re.compile(
+# uma tool call mascarada (com ou sem ```json fence). Usado pra suprimir
+# text_delta visual antes do parser final extrair.
+_INLINE_TC_FENCED_RE = re.compile(
     r"```(?:json|tool_call)?\s*\{[^}]{0,200}?[\"'](?:name|function_name|tool|nome)[\"']",
+    re.IGNORECASE | re.DOTALL,
+)
+# Versão "JSON cru" sem fence: começa com `{` (após whitespace opcional)
+# e tem `"name"`/`"function"`/`"tool"` em até ~150 chars.
+_INLINE_TC_RAW_RE = re.compile(
+    r"^\s*\{[^}]{0,200}?[\"'](?:name|function_name|tool|nome)[\"']",
     re.IGNORECASE | re.DOTALL,
 )
 
 
 def _looks_like_inline_tool_call(text: str) -> bool:
-    """True se ``text`` (parcial, mid-stream) parece estar dentro de um
-    bloco ```json com uma tool call. Conservador: requer abertura de fence
-    + ``"name"``/equivalente já visível.
+    """True se ``text`` (parcial, mid-stream) parece estar dentro de uma
+    tool call mascarada — seja em bloco ```json ou JSON cru no início.
     """
-    if "```" not in text:
+    if not text:
         return False
-    return bool(_INLINE_TC_RE.search(text))
+    if "```" in text and _INLINE_TC_FENCED_RE.search(text):
+        return True
+    # JSON cru no começo do conteúdo (caso clássico do Qwen Q4 alucinando
+    # tool calls quando o pedido é trivial tipo "olá").
+    if "{" in text and _INLINE_TC_RAW_RE.search(text):
+        return True
+    return False
 
 
 # ----------------------------------------------------------------------
