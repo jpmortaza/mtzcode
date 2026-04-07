@@ -40,6 +40,13 @@ from mtzcode.tools.grep import GrepTool
 from mtzcode.tools.notify import NotifyTool
 from mtzcode.tools.open_app import OpenAppTool
 from mtzcode.tools.open_url import OpenUrlTool
+from mtzcode.tools.orchestrator import (
+    PlanAdvanceTool,
+    PlanListTool,
+    PlanSetStatusTool,
+    PlanShowTool,
+    PlanTaskTool,
+)
 from mtzcode.tools.pdf import PdfFromMarkdownTool, PdfReadTool
 from mtzcode.tools.python_exec import PythonExecTool
 from mtzcode.tools.read import ReadTool
@@ -69,6 +76,11 @@ TOOL_GROUPS: dict[str, list[type[Tool]]] = {
         PythonExecTool,
         TodoWriteTool,
         TodoReadTool,
+        PlanTaskTool,
+        PlanShowTool,
+        PlanSetStatusTool,
+        PlanAdvanceTool,
+        PlanListTool,
         WebFetchTool,
         OpenUrlTool,
     ],
@@ -174,6 +186,11 @@ __all__ = [
     "PythonExecTool",
     "TodoWriteTool",
     "TodoReadTool",
+    "PlanTaskTool",
+    "PlanShowTool",
+    "PlanSetStatusTool",
+    "PlanAdvanceTool",
+    "PlanListTool",
     "FindFilesTool",
     "FindImagesTool",
     "GlobTool",

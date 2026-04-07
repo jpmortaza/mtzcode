@@ -74,8 +74,7 @@ class ChatClient:
 
         if response.status_code != 200:
             raise ChatClientError(
-                f"{self.profile.label} respondeu {response.status_code}: "
-                f"{response.text[:500]}"
+                self._format_http_error(response.status_code, response.text)
             )
 
         data = response.json()
@@ -112,8 +111,7 @@ class ChatClient:
                     except Exception:
                         body = "<erro lendo body>"
                     raise ChatClientError(
-                        f"{self.profile.label} respondeu {response.status_code}: "
-                        f"{body[:500]}"
+                        self._format_http_error(response.status_code, body)
                     )
                 for line in response.iter_lines():
                     if not line:
@@ -173,6 +171,24 @@ class ChatClient:
             },
         )
         payload.setdefault("keep_alive", keep_alive)
+
+    def _format_http_error(self, status: int, body: str) -> str:
+        """Constrói mensagem de erro amigável, detectando casos comuns do Ollama."""
+        snippet = (body or "")[:500]
+        # Caso clássico: modelo não puxado no Ollama → 404 "model 'X' not found"
+        if (
+            self.profile.is_local
+            and self.profile.backend == "ollama"
+            and status == 404
+            and "not found" in snippet.lower()
+        ):
+            return (
+                f"{self.profile.label}: o modelo '{self.profile.model}' não está "
+                f"instalado no Ollama. Rode no terminal:\n\n"
+                f"    ollama pull {self.profile.model}\n\n"
+                f"(uma vez baixado, é só mandar a mensagem de novo)"
+            )
+        return f"{self.profile.label} respondeu {status}: {snippet}"
 
     def close(self) -> None:
         self._client.close()

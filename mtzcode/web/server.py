@@ -551,6 +551,58 @@ def create_app() -> FastAPI:
         _t.clear_todos()
         return {"ok": True}
 
+    # ==================================================================
+    # Orquestrador — planos (fase 1: Planner)
+    # ==================================================================
+    @app.get("/api/plans")
+    def plans_list() -> dict[str, Any]:
+        from mtzcode import orchestrator as _orch
+        cur = _orch.current_plan()
+        return {
+            "plans": _orch.list_plans(),
+            "current_id": (cur or {}).get("id"),
+        }
+
+    @app.get("/api/plans/current")
+    def plans_current() -> dict[str, Any]:
+        from mtzcode import orchestrator as _orch
+        from mtzcode.orchestrator.store import summarize_plan
+        plan = _orch.current_plan()
+        if not plan:
+            return {"plan": None}
+        return {"plan": plan, "summary": summarize_plan(plan)}
+
+    @app.get("/api/plans/{plan_id}")
+    def plans_get(plan_id: str) -> dict[str, Any]:
+        from mtzcode import orchestrator as _orch
+        from mtzcode.orchestrator.store import summarize_plan
+        plan = _orch.load_plan(plan_id)
+        if not plan:
+            raise HTTPException(status_code=404, detail="plano não encontrado")
+        return {"plan": plan, "summary": summarize_plan(plan)}
+
+    @app.post("/api/plans/{plan_id}/tasks/{task_id}")
+    def plans_set_task(plan_id: str, task_id: str, req: dict[str, Any]) -> dict[str, Any]:
+        from mtzcode import orchestrator as _orch
+        from mtzcode.orchestrator.store import summarize_plan
+        status = req.get("status")
+        if not status:
+            raise HTTPException(status_code=400, detail="status é obrigatório")
+        try:
+            plan = _orch.set_task_status(plan_id, task_id, status)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"plan": plan, "summary": summarize_plan(plan)}
+
+    @app.post("/api/plans/advance")
+    def plans_advance() -> dict[str, Any]:
+        from mtzcode import orchestrator as _orch
+        from mtzcode.orchestrator.store import summarize_plan
+        plan = _orch.advance_current()
+        if not plan:
+            raise HTTPException(status_code=404, detail="sem plano corrente")
+        return {"plan": plan, "summary": summarize_plan(plan)}
+
     @app.post("/api/chat/attach")
     async def chat_attach(file: UploadFile = File(...)) -> dict[str, Any]:
         """Recebe um arquivo do chat e salva em ~/.mtzcode/uploads/.
