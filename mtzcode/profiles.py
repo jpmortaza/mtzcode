@@ -96,26 +96,11 @@ PROFILES: dict[str, Profile] = {
         is_local=True,
         description="Llama 3.1 8B — bom balanço PT/EN. Leve e rápido pra rodar local.",
     ),
-    "deepseek-coder": Profile(
-        name="deepseek-coder",
-        label="DeepSeek Coder V2 16B (local)",
-        backend="ollama",
-        model="deepseek-coder-v2:16b",
-        base_url="http://localhost:11434/v1",
-        api_key_env=None,
-        is_local=True,
-        description="DeepSeek Coder V2 16B — forte em código, tool calling estável. Baixar com: ollama pull deepseek-coder-v2:16b",
-    ),
-    "deepseek-r1": Profile(
-        name="deepseek-r1",
-        label="DeepSeek R1 14B (local, raciocínio)",
-        backend="ollama",
-        model="deepseek-r1:14b",
-        base_url="http://localhost:11434/v1",
-        api_key_env=None,
-        is_local=True,
-        description="DeepSeek R1 14B — modelo de raciocínio (chain-of-thought). Mais lento, melhor em tarefas complexas. ollama pull deepseek-r1:14b",
-    ),
+    # NOTE: removidos deepseek-coder-v2 e deepseek-r1 — nenhum dos dois
+    # suporta tool calling no Ollama (a API devolve 400 "does not support tools").
+    # O mtzcode é um agent loop que depende de tools pra fazer qualquer
+    # coisa útil, então esses profiles ficavam inutilizáveis. Quando o
+    # Ollama lançar uma versão do DeepSeek com tools, voltamos a expor.
     "mtzcode-pt": Profile(
         name="mtzcode-pt",
         label="mtzcode PT-BR (fine-tuned)",

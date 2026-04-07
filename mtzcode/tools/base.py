@@ -50,6 +50,9 @@ class Tool(ABC):
     Args: ClassVar[type[BaseModel]]
     # Tools destrutivas disparam prompt de confirmação antes de executar.
     destructive: ClassVar[bool] = False
+    # Cache de schemas (gerado preguiçosamente, imutável após a 1ª chamada).
+    _schema_cache_full: ClassVar[dict[str, Any] | None] = None
+    _schema_cache_slim: ClassVar[dict[str, Any] | None] = None
 
     def schema(self, slim: bool = False) -> dict[str, Any]:
         """Schema OpenAI/Ollama-style para tool calling.
@@ -58,6 +61,11 @@ class Tool(ABC):
         e os campos do Args perdem ``title``/``description`` longas.
         Reduz drasticamente o overhead de tokens em modelos locais.
         """
+        # Cache por instância (não por classe — uma instância por registry)
+        cache_attr = "_schema_cache_slim" if slim else "_schema_cache_full"
+        cached = getattr(self, cache_attr, None)
+        if cached is not None:
+            return cached
         if slim:
             desc = (self.description or "").strip().split("\n")[0]
             if len(desc) > 100:
@@ -66,7 +74,7 @@ class Tool(ABC):
         else:
             desc = self.description
             params = self.Args.model_json_schema()
-        return {
+        built = {
             "type": "function",
             "function": {
                 "name": self.name,
@@ -74,6 +82,11 @@ class Tool(ABC):
                 "parameters": params,
             },
         }
+        try:
+            object.__setattr__(self, cache_attr, built)
+        except (AttributeError, TypeError):
+            pass
+        return built
 
     def call(self, raw_args: dict[str, Any]) -> str:
         """Valida os argumentos e despacha para `run()`. Retorna sempre string."""

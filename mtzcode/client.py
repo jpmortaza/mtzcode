@@ -175,18 +175,36 @@ class ChatClient:
     def _format_http_error(self, status: int, body: str) -> str:
         """Constrói mensagem de erro amigável, detectando casos comuns do Ollama."""
         snippet = (body or "")[:500]
+        low = snippet.lower()
         # Caso clássico: modelo não puxado no Ollama → 404 "model 'X' not found"
         if (
             self.profile.is_local
             and self.profile.backend == "ollama"
             and status == 404
-            and "not found" in snippet.lower()
+            and "not found" in low
         ):
             return (
                 f"{self.profile.label}: o modelo '{self.profile.model}' não está "
                 f"instalado no Ollama. Rode no terminal:\n\n"
                 f"    ollama pull {self.profile.model}\n\n"
                 f"(uma vez baixado, é só mandar a mensagem de novo)"
+            )
+        # Modelo instalado mas sem suporte a tool calling (ex: deepseek-coder-v2,
+        # deepseek-r1, gemma2 antigo). O mtzcode é um agent loop e DEPENDE de tools.
+        if (
+            self.profile.is_local
+            and self.profile.backend == "ollama"
+            and status == 400
+            and "does not support tools" in low
+        ):
+            return (
+                f"{self.profile.label}: o modelo '{self.profile.model}' não suporta "
+                f"tool calling no Ollama, e o mtzcode precisa de tools pra funcionar. "
+                f"Troca de profile pra um modelo compatível:\n\n"
+                f"  • qwen-14b   (Qwen 2.5 Coder 14B — recomendado)\n"
+                f"  • qwen-7b    (mais leve)\n"
+                f"  • llama3.1-8b\n\n"
+                f"Use o dropdown de modelo na UI ou /modelo no CLI."
             )
         return f"{self.profile.label} respondeu {status}: {snippet}"
 

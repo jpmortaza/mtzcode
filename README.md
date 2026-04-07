@@ -58,26 +58,40 @@ uma resposta final — igual ao Claude Code.
 
 - ✅ **Duas interfaces** — web UI no navegador ou REPL no terminal
 - ✅ **Agent loop** com tool calling iterativo (estilo Claude Code)
-- ✅ **8 tools nativas**:
-  - `read` — lê arquivos com numeração de linhas
-  - `write` — cria/sobrescreve arquivos
-  - `edit` — substituição exata com **diff unified colorido**
-  - `bash` — executa comandos shell com timeout
-  - `glob` — busca arquivos por padrão
-  - `grep` — busca conteúdo (usa ripgrep se disponível)
-  - `search_code` — **busca semântica** no código via embeddings locais (RAG)
-  - `search_knowledge` — **busca semântica** em knowledge bases permanentes de documentos
-- ✅ **Skills** — pasta `skills/` com especialistas plugáveis (Python, SQL, code review, Git, etc). Comunidade pode contribuir via PR.
-- ✅ **Knowledge base** — ingestão de PDFs, Markdowns, docs em geral como memória permanente (ex: política da empresa, manuais internos)
-- ✅ **Streaming real de tokens** (CLI e web)
-- ✅ **Múltiplos perfis de modelo** com troca quente (CLI: `/modelo`, web: dropdown)
-- ✅ **RAG integrado** — indexação incremental com `nomic-embed-text`, search semântico como tool
-- ✅ **Confirmação destrutiva** antes de `write`/`edit`/`bash` (CLI)
-- ✅ **Modo plano** (`/plano`) pra pesquisar sem executar
-- ✅ **Slash commands customizados** — `~/.mtzcode/commands/*.md`
-- ✅ **Fallback robusto** de parsing de tool calls (compatível com modelos Q4)
-- ✅ **Mensagens em português brasileiro**
-- ✅ **Groq opcional** como fallback cloud quando precisar de velocidade
+- ✅ **Stack-agnóstico** — não é só Python. Cria projeto em Next.js, Go, Rust, Flutter, Ruby, PHP, Java, Swift… o modelo escolhe a stack certa pro pedido.
+- ✅ **Tools nativas** (grupo `core`):
+  - `read` / `write` / `edit` — arquivos com diff unified colorido
+  - `bash` — executa comandos shell com timeout e confirmação destrutiva
+  - `python_exec` — sandbox isolado em subprocess pra rodar Python sem precisar do bash
+  - `glob` / `grep` / `search_code` — busca por nome, conteúdo e semântica (RAG)
+  - `search_knowledge` — busca semântica em knowledge bases permanentes
+  - `web_fetch` / `open_url` — abrir páginas e baixar conteúdo
+  - `todo_write` / `todo_read` — TODO list persistente espelhada na UI
+  - `plan_task` / `plan_show` / `plan_set_status` / `plan_advance` / `plan_list` — **orquestrador** (Planner) pra projetos do PRD ao deploy
+  - `spawn_agent` — **sub-agentes** (Executor) com contexto e tools isolados
+- ✅ **Tool groups extras** (opt-in via `MTZCODE_TOOL_GROUPS`):
+  - `github` — clone/info/push/analyze de repos via `gh` CLI
+  - `web` — `web_search` + `browser` real
+  - `apify` — scraping/automação via plataforma Apify
+  - `macos` — clipboard, AppleScript, screenshot, abrir apps, notificações
+  - `documents` — ler/escrever docx, pdf, xlsx
+  - `superpowers` — Spotlight (find_files / find_images)
+- ✅ **Orquestrador (Planner + Executor)** — pedidos grandes ("crie um SaaS de agendamento com login e Stripe") viram um plano estruturado em fases → tarefas, persistido em `~/.mtzcode/orchestrator/` e espelhado na aba **Tarefas** da UI. Sub-agentes podem ser spawnados pra executar partes isoladas (pesquisa web extensa, geração de arquivos parecidos) sem poluir o histórico do principal. Profundidade máxima de delegação = 3.
+- ✅ **TODO list persistente** — `todo_write` mantém uma lista que sobrevive entre sessões e aparece em tempo real no painel direito da UI.
+- ✅ **Sessões persistentes** — cada conversa vira `.jsonl` em `~/.mtzcode/logs/`. Auto-resume no CLI (detecta sessão mais recente do `cwd`) e listagem clicável na Web UI.
+- ✅ **Fila de execução no chat** — pode mandar várias mensagens enquanto o assistente responde, vão sendo processadas em ordem.
+- ✅ **Anexos no chat** — drag & drop ou botão de anexar arquivos direto no composer. O modelo recebe o caminho e usa `read` pra ler.
+- ✅ **Atalho de voz** (`Cmd/Ctrl+Shift+M`) — ditado por voz com transcrição.
+- ✅ **Skills** — pasta `skills/` com especialistas plugáveis (Python, SQL, code review, Git, campanhas eleitorais, social media…).
+- ✅ **Knowledge base** — ingestão de PDFs, Markdowns, docs em geral como memória permanente.
+- ✅ **Streaming real de tokens** (CLI e web).
+- ✅ **Múltiplos perfis de modelo** com troca quente (CLI: `/modelo`, web: dropdown). Erro amigável quando o modelo não está puxado no Ollama ou não suporta tool calling.
+- ✅ **RAG integrado** — indexação incremental com `nomic-embed-text`, busca semântica como tool.
+- ✅ **Modo plano** (`/plano`) pra pesquisar sem executar.
+- ✅ **Slash commands customizados** — `~/.mtzcode/commands/*.md`.
+- ✅ **Fallback robusto** de parsing de tool calls (compatível com modelos Q4).
+- ✅ **Mensagens em português brasileiro**.
+- ✅ **Groq, Maritaca (Sabiá-3) opcionais** como fallback cloud quando precisar de velocidade.
 
 ## Quick start (TL;DR)
 
@@ -932,18 +946,29 @@ mtzcode/
 
 - [x] **Fase 0** — Pré-requisitos (Ollama, modelos)
 - [x] **Fase 1** — Scaffold + chat REPL
-- [x] **Fase 2** — 6 tools básicas (read, write, edit, bash, glob, grep)
+- [x] **Fase 2** — Tools básicas (read, write, edit, bash, glob, grep)
 - [x] **Fase 3** — Agent loop com tool calling
 - [x] **Profiles** — Múltiplos modelos com `/modelo` (local e cloud)
 - [x] **Fase 4** — Streaming de tokens, diffs coloridos, confirmação destrutiva
-- [x] **Fase 5 (parcial)** — Slash commands customizados, modo plano
+- [x] **Fase 5** — Slash commands customizados, modo plano
 - [x] **Fase 6** — RAG completo (embeddings + índice SQLite + `search_code` tool)
 - [x] **Web UI** — FastAPI + HTML single-page estilo app do Claude, streaming real
-- [x] **Skills** — sistema de skills plugáveis + 6 skills oficiais
+- [x] **Skills** — sistema de skills plugáveis + skills oficiais
 - [x] **Knowledge base** — ingestão de docs (PDF, md, docx) como memória permanente
+- [x] **Persistência de histórico** — `~/.mtzcode/logs/*.jsonl`, auto-resume CLI, listagem na Web UI
+- [x] **Fila de execução** — várias mensagens enfileiradas enquanto o assistente responde
+- [x] **Atalho de voz** — `Cmd/Ctrl+Shift+M`
+- [x] **Anexos no chat** — drag & drop / botão de anexar
+- [x] **TODO list persistente** — `todo_write` espelhado na aba Tarefas
+- [x] **`python_exec`** — sandbox isolado em subprocess
+- [x] **Tools GitHub** — clone/info/push/analyze via `gh` CLI
+- [x] **Orquestrador fase 1** — `plan_task` + REST `/api/plans/*` + espelho automático na UI
+- [x] **Orquestrador fase 2** — `spawn_agent` (sub-agentes com tools isoladas, profundidade limitada)
+- [ ] **Orquestrador fase 3** — Verifier (sub-agente que valida cada fase antes de avançar)
+- [ ] **RAG por coleção** — `~/.mtzcode/knowledge/<coleção>/` com watcher e drag & drop na UI
+- [ ] **Fine-tuning de conversas** — pipeline Evolution API (WhatsApp) + Instagram → train.jsonl
 - [ ] **Fase 7** — LoRA fine-tuning sobre logs de uso (especialização)
 - [ ] **MCP client** — conectar a servidores Model Context Protocol
-- [ ] **Persistência de histórico** — retomar conversas entre sessões
 - [ ] **Confirmação destrutiva na Web UI** — prompt inline pra write/edit/bash
 - [ ] **Multi-sessão na Web UI** — várias conversas em abas
 - [ ] **Auto-ping do Ollama** — evitar cold start a cada 5min
