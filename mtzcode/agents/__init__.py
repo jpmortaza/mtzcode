@@ -78,6 +78,17 @@ from mtzcode.agents.store import (
     StoreError,
     Stores,
 )
+from mtzcode.agents.workspace import (
+    DocInventory,
+    ScaffoldResult,
+    inventory_docs,
+    scaffold_workspace,
+)
+from mtzcode.agents.presets import (
+    fullstack_dev_agent,
+    notebook_chat_agent,
+    refactor_bot_agent,
+)
 
 __all__ = [
     # models
@@ -118,4 +129,13 @@ __all__ = [
     "ManagedSession",
     "TurnResult",
     "open_session",
+    # workspace
+    "DocInventory",
+    "ScaffoldResult",
+    "inventory_docs",
+    "scaffold_workspace",
+    # presets
+    "fullstack_dev_agent",
+    "notebook_chat_agent",
+    "refactor_bot_agent",
 ]

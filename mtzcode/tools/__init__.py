@@ -42,6 +42,7 @@ from mtzcode.tools.open_app import OpenAppTool
 from mtzcode.tools.open_url import OpenUrlTool
 from mtzcode.tools.pdf import PdfFromMarkdownTool, PdfReadTool
 from mtzcode.tools.read import ReadTool
+from mtzcode.tools.scaffold import ScaffoldWorkspaceTool
 from mtzcode.tools.screenshot import ScreenshotTool
 from mtzcode.tools.search import SearchCodeTool
 from mtzcode.tools.search_knowledge import SearchKnowledgeTool
@@ -54,7 +55,7 @@ from mtzcode.tools.xlsx import XlsxReadTool, XlsxWriteTool
 
 # Grupos de tools — controlam o tamanho do contexto enviado ao modelo.
 TOOL_GROUPS: dict[str, list[type[Tool]]] = {
-    # CORE: estritamente necessário pra trabalhar com código (10 tools)
+    # CORE: estritamente necessário pra trabalhar com código (11 tools)
     "core": [
         ReadTool,
         WriteTool,
@@ -66,6 +67,7 @@ TOOL_GROUPS: dict[str, list[type[Tool]]] = {
         BashTool,
         WebFetchTool,
         OpenUrlTool,
+        ScaffoldWorkspaceTool,
     ],
     # WEB: pesquisa e navegador real
     "web": [WebSearchTool, BrowserTool],
